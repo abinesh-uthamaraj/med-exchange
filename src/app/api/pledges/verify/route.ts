@@ -4,62 +4,93 @@ import { createClient } from "@/lib/supabase/server";
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    const { pledge_id } = await request.json();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-    // 1. Fetch pledge and parent request details
+    const body = await request.json().catch(() => null);
+    if (!body || !body.pledge_id) {
+      return NextResponse.json({ error: "Invalid request. Missing pledge_id." }, { status: 400 });
+    }
+
+    const { pledge_id } = body;
+
     const { data: pledge, error: fetchErr } = await supabase
       .from("pledges")
       .select("*, requests(*)")
       .eq("id", pledge_id)
       .single();
 
-    if (fetchErr || !pledge) {
-      return NextResponse.json({ error: "Pledge not found" }, { status: 404 });
+    if (fetchErr || !pledge || !pledge.requests) {
+      return NextResponse.json({ error: "Pledge or associated request not found" }, { status: 404 });
     }
 
     if (pledge.requests.requester_id !== user.id) {
-      return NextResponse.json({ error: "Only the requester can verify blood receipt." }, { status: 403 });
+      return NextResponse.json(
+        { error: "Forbidden. Only the request owner can verify receipt." },
+        { status: 403 }
+      );
     }
 
-    const today = new Date().toISOString();
+    if (pledge.status === "Verified") {
+      return NextResponse.json(
+        { error: "This pledge has already been verified and recorded." },
+        { status: 400 }
+      );
+    }
 
-    // 2. Mark pledge as Verified
-    await supabase
+    const todayIso = new Date().toISOString();
+    const todayDate = todayIso.split("T")[0];
+
+    const { error: pledgeUpdateErr } = await supabase
       .from("pledges")
-      .update({ status: "Verified", verified_at: today })
+      .update({ status: "Verified", verified_at: todayIso })
       .eq("id", pledge_id);
 
-    // 3. Decrement units on request
-    const remainingUnits = Math.max(0, pledge.requests.units_needed - pledge.units_pledged);
+    if (pledgeUpdateErr) {
+      return NextResponse.json({ error: "Failed to update pledge status." }, { status: 500 });
+    }
+
+    const pledgedUnits = pledge.units_pledged || 1;
+    const remainingUnits = Math.max(0, pledge.requests.units_needed - pledgedUnits);
+
     await supabase
       .from("requests")
       .update({
         units_needed: remainingUnits,
-        status: remainingUnits === 0 ? "Fulfilled" : "Active"
+        status: remainingUnits === 0 ? "Fulfilled" : "Active",
       })
       .eq("id", pledge.request_id);
 
-    // 4. Save into donation_history log
-    await supabase.from("donation_history").insert({
+    const { error: historyErr } = await supabase.from("donation_history").insert({
       donor_id: pledge.donor_id,
       request_id: pledge.request_id,
       item_name: pledge.requests.item_name,
-      units_donated: pledge.units_pledged,
+      units_donated: pledgedUnits,
       hospital_location: pledge.requests.hospital_location,
       verified_by: user.id,
-      verified_at: today
+      verified_at: todayIso,
     });
 
-    // 5. Update donor's last_donation_date to today
-    await supabase
-      .from("profiles")
-      .update({ last_donation_date: today.split("T")[0] })
-      .eq("id", pledge.donor_id);
+    if (historyErr) {
+      console.error("Failed to insert donation history:", historyErr);
+    }
 
-    return NextResponse.json({ success: true }, { status: 200 });
+    if (pledge.requests.item_type === "blood") {
+      await supabase
+        .from("profiles")
+        .update({ last_donation_date: todayDate })
+        .eq("id", pledge.donor_id);
+    }
+
+    return NextResponse.json(
+      { success: true, message: "Pledge verified successfully." },
+      { status: 200 }
+    );
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Internal Server Error" },
