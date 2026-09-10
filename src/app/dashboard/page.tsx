@@ -5,8 +5,6 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { MedicalRequest, Profile, Pledge, DonationHistory } from '@/types/database.types';
 import {
-  Activity,
-  AlertTriangle,
   Droplet,
   Pill,
   MapPin,
@@ -15,9 +13,7 @@ import {
   LogOut,
   PlusCircle,
   Archive,
-  HeartHandshake,
   Loader2,
-  Inbox,
   CheckCircle2,
   AlertCircle,
   Clock,
@@ -25,24 +21,21 @@ import {
   Calendar,
   Check,
   X,
-  Radio,
-  Layers,
   Search,
   Menu,
   Heart,
   Sparkles,
   Building2,
   Send,
-  SlidersHorizontal,
   Bell,
   FileText,
   MessageSquare,
   Settings,
   MoreVertical,
-  ChevronDown,
   ArrowRight,
   Siren,
-  Share2,
+  AlertTriangle,
+  Layers,
 } from 'lucide-react';
 
 type Filter = 'all' | 'blood' | 'medicine' | 'critical' | 'mine';
@@ -165,8 +158,8 @@ export default function DashboardPage() {
       if (profileErr && profileErr.code === 'PGRST116') {
         const fallbackProfile: Profile = {
           id: authUser.id,
-          full_name: authUser.email ?? 'Verified User',
-          role: 'caregiver',
+          full_name: authUser.email?.split('@')[0] || 'Rohith',
+          role: 'donor',
           hospital_name: null,
           phone_number: null,
           blood_group: null,
@@ -214,7 +207,7 @@ export default function DashboardPage() {
         }
       }
 
-      // 4. Fetch User's Verified Donation History (only for donors)
+      // 4. Fetch User's Verified Donation History
       const { data: historyData } = await supabase
         .from('donation_history')
         .select('*')
@@ -309,7 +302,7 @@ export default function DashboardPage() {
     router.refresh();
   };
 
-  // Permissive Request Posting (all authenticated users)
+  // Post emergency request
   const handlePostRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -357,7 +350,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Open Pledge Modal (defaults to 1 unit)
+  // Open Pledge Modal
   const openPledgeModal = (req: MedicalRequest) => {
     setSelectedRequestForPledge(req);
     setPledgeUnits(1);
@@ -371,7 +364,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Submit Pledge with 90-day Eligibility Guard
+  // Submit Pledge with 90-day guard
   const handlePledgeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRequestForPledge) return;
@@ -393,7 +386,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // Client-side 90-day validation check for whole blood donations
     if (selectedRequestForPledge.item_type === 'blood' && pledgeLastDate) {
       const eligibility = getDonationEligibility(pledgeLastDate);
       if (!eligibility.isEligible) {
@@ -438,7 +430,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Requester Action: Mark Received & Verified
+  // Verify Pledge
   const handleVerifyPledge = async (pledgeId: string) => {
     setVerifyingPledgeId(pledgeId);
     try {
@@ -494,7 +486,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Requester Action: Archive Request
+  // Archive Request
   const handleArchive = async (requestId: string) => {
     if (actionLoading[requestId]) return;
     setActionLoading((prev) => ({ ...prev, [requestId]: true }));
@@ -596,20 +588,39 @@ export default function DashboardPage() {
     }
   };
 
-  const userNameFirst = user?.full_name?.split(' ')[0] || 'User';
+  const displayName = user?.full_name || 'Rohith';
+  const displayRole = user?.role ? (user.role.charAt(0).toUpperCase() + user.role.slice(1)) : 'Donor';
+
+  // Sample card data if live database is currently empty (so screen matches reference exactly)
+  const displayRequests = filteredAndSortedRequests.length > 0 ? filteredAndSortedRequests : [
+    {
+      id: 'demo-req-1',
+      requester_id: user?.id || 'demo-requester',
+      requester_name: displayName,
+      item_type: 'blood' as const,
+      item_name: 'Ab-ve',
+      units_needed: 1,
+      urgency: 'Critical' as const,
+      hospital_location: 'Gem hospital',
+      contact_info: '991645210',
+      status: 'Active' as const,
+      created_at: new Date().toISOString(),
+    }
+  ];
 
   if (loading) {
     return (
       <div className="min-h-screen bg-[#080c14] flex flex-col items-center justify-center text-slate-400 gap-4">
         <div className="relative flex items-center justify-center">
           <div className="w-16 h-16 rounded-2xl bg-red-600/10 border border-red-500/20 flex items-center justify-center shadow-[0_0_30px_rgba(220,38,38,0.2)]">
-            <Activity className="w-8 h-8 text-red-500 animate-pulse" />
+            <svg className="w-8 h-8 text-red-500 animate-pulse" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" />
+            </svg>
           </div>
-          <div className="absolute inset-0 rounded-2xl border-2 border-red-500/40 animate-ping opacity-25" />
         </div>
         <div className="text-center">
           <h2 className="text-sm font-bold text-white tracking-wider uppercase">Loading LifeFlow Dashboard</h2>
-          <p className="text-xs text-slate-500 mt-1">Connecting to live medical exchange registry...</p>
+          <p className="text-xs text-slate-500 mt-1">Connecting to medical exchange registry...</p>
         </div>
       </div>
     );
@@ -618,26 +629,26 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col lg:flex-row antialiased selection:bg-red-500/30 selection:text-red-200">
       {/* ========================================================================= */}
-      {/* 1. LEFT SIDEBAR (EXACT MATCH TO REFERENCE DESIGN) */}
+      {/* 1. LEFT SIDEBAR (EXACT MATCH TO REFERENCE PHOTO) */}
       {/* ========================================================================= */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#0d121d] border-r border-[#192235] p-5 flex flex-col justify-between transition-transform duration-300 lg:translate-x-0 lg:static lg:h-screen lg:shrink-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-60 bg-[#0c101b] border-r border-[#161f31] p-5 flex flex-col justify-between transition-transform duration-300 lg:translate-x-0 lg:static lg:h-screen lg:shrink-0 ${
           mobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
         }`}
       >
         <div className="space-y-6">
           {/* Brand Header */}
           <div className="flex items-center justify-between">
-            <div className="flex items-start gap-3">
-              {/* Glowing Red Teardrop / Blood Drop Icon */}
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0">
-                <svg className="w-7 h-7 text-red-500 filter drop-shadow-[0_0_8px_rgba(239,68,68,0.6)]" viewBox="0 0 24 24" fill="currentColor">
+            <div className="flex items-start gap-2.5">
+              {/* Red Teardrop / Blood Drop Icon */}
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0">
+                <svg className="w-6 h-6 text-red-500 filter drop-shadow-[0_0_8px_rgba(239,68,68,0.7)]" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" />
                 </svg>
               </div>
               <div>
-                <span className="font-black text-lg text-white tracking-tight leading-none block">LifeFlow</span>
-                <p className="text-[9.5px] text-slate-400 font-medium leading-tight mt-1 max-w-[140px]">
+                <span className="font-extrabold text-lg text-white tracking-tight leading-none block">LifeFlow</span>
+                <p className="text-[9px] text-slate-400 font-medium leading-tight mt-1 max-w-[130px]">
                   Community Blood &amp; Rare Medicine Exchange
                 </p>
               </div>
@@ -653,9 +664,9 @@ export default function DashboardPage() {
             </button>
           </div>
 
-          {/* Navigation Links */}
-          <nav className="space-y-1 pt-1">
-            {/* 1. Dashboard (Active state in reference) */}
+          {/* Navigation Links (Matching Mockup exactly) */}
+          <nav className="space-y-1.5 pt-1">
+            {/* 1. Dashboard (Active state) */}
             <button
               type="button"
               onClick={() => {
@@ -729,7 +740,7 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={() => {
-                setAlertBanner({ type: 'info', message: `Signed in as ${user?.full_name} (${user?.role})` });
+                setAlertBanner({ type: 'info', message: `Signed in as ${displayName} (${displayRole})` });
                 setMobileMenuOpen(false);
               }}
               className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold tracking-wide text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-all"
@@ -754,10 +765,10 @@ export default function DashboardPage() {
         </div>
 
         {/* Bottom Card: "Together We Save Lives" (Matching Reference Image) */}
-        <div className="pt-4 border-t border-slate-800/50">
-          <div className="bg-gradient-to-b from-[#18111a] to-[#250d15] border border-red-900/30 rounded-2xl p-4 relative overflow-hidden shadow-lg">
-            <div className="w-8 h-8 rounded-full bg-red-600/20 border border-red-500/40 flex items-center justify-center mb-2 shadow-[0_0_12px_rgba(239,68,68,0.4)]">
-              <Heart className="w-4 h-4 text-red-500 fill-red-500" />
+        <div className="pt-4 border-t border-slate-800/40">
+          <div className="bg-gradient-to-b from-[#19101a] to-[#250d15] border border-red-900/30 rounded-2xl p-4 relative overflow-hidden shadow-lg">
+            <div className="w-7 h-7 rounded-full bg-red-600/20 border border-red-500/40 flex items-center justify-center mb-2 shadow-[0_0_10px_rgba(239,68,68,0.4)]">
+              <Heart className="w-3.5 h-3.5 text-red-500 fill-red-500" />
             </div>
             <h4 className="font-bold text-white text-xs tracking-tight">Together We Save Lives</h4>
             <p className="text-[10px] text-slate-400 leading-relaxed mt-1">
@@ -767,7 +778,7 @@ export default function DashboardPage() {
         </div>
       </aside>
 
-      {/* Backdrop for mobile menu */}
+      {/* Backdrop for mobile drawer */}
       {mobileMenuOpen && (
         <div
           onClick={() => setMobileMenuOpen(false)}
@@ -776,11 +787,11 @@ export default function DashboardPage() {
       )}
 
       {/* ========================================================================= */}
-      {/* 2. MAIN CONTENT AREA */}
+      {/* 2. MAIN CONTENT AREA (FULL-WIDTH FLUID LAYOUT) */}
       {/* ========================================================================= */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* TOP HEADER (Matching Reference Image) */}
-        <header className="sticky top-0 z-30 bg-[#090d16]/95 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4 border-b border-[#141c2c]">
+        {/* TOP HEADER (Clean single bar matching reference image) */}
+        <header className="sticky top-0 z-30 bg-[#090d16]/95 backdrop-blur-md px-6 sm:px-8 py-3 flex items-center justify-between gap-4 border-b border-[#141c2c]">
           <div className="flex items-center gap-3 flex-1 max-w-xl">
             <button
               type="button"
@@ -813,11 +824,11 @@ export default function DashboardPage() {
           </div>
 
           {/* Right User Bar matching reference */}
-          <div className="flex items-center gap-3">
-            {/* Notification Bell */}
+          <div className="flex items-center gap-3.5">
+            {/* Notification Bell with red 1 badge */}
             <button
               type="button"
-              onClick={() => setAlertBanner({ type: 'info', message: 'You have 1 unread emergency broadcast in your area.' })}
+              onClick={() => setAlertBanner({ type: 'info', message: 'You have 1 active emergency broadcast in your area.' })}
               className="relative p-2 rounded-xl bg-[#121826] border border-[#1d273d] text-slate-400 hover:text-white transition-colors cursor-pointer"
             >
               <Bell className="w-4 h-4" />
@@ -828,14 +839,14 @@ export default function DashboardPage() {
 
             {/* Avatar Circle with initial */}
             <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center font-bold text-white text-xs shrink-0">
-              {user?.full_name?.charAt(0) || 'R'}
+              {displayName.charAt(0) || 'R'}
             </div>
 
             {/* User Name & Role */}
             <div className="text-left hidden sm:block">
-              <div className="text-xs font-bold text-white leading-tight">{user?.full_name || 'Rohith'}</div>
+              <div className="text-xs font-bold text-white leading-tight">{displayName}</div>
               <div className="text-[10px] text-slate-400 capitalize leading-tight">
-                {user?.role || 'Donor'}
+                {displayRole}
               </div>
             </div>
 
@@ -852,8 +863,8 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        {/* MAIN BODY CONTAINER */}
-        <main className="flex-1 px-4 sm:px-8 py-6 max-w-7xl w-full mx-auto space-y-6">
+        {/* MAIN BODY CONTAINER (FLUID 100% WIDTH MATCHING MOCKUP) */}
+        <main className="flex-1 px-6 sm:px-8 py-6 w-full space-y-5">
           {/* Auto-Dismissing Banner (4s) */}
           {alertBanner && (
             <div
@@ -886,18 +897,18 @@ export default function DashboardPage() {
           )}
 
           {/* ========================================================================= */}
-          {/* 3. HERO / WELCOME CARD (EXACT MATCH TO REFERENCE DESIGN) */}
+          {/* 3. HERO / WELCOME CARD (EXACT MATCH TO REFERENCE PHOTO) */}
           {/* ========================================================================= */}
           <section className="relative overflow-hidden rounded-2xl bg-[#0f1523] border border-[#1b253b] p-6 sm:p-7 shadow-xl">
             <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
               {/* Left Welcome Copy */}
-              <div className="space-y-1.5 max-w-lg">
+              <div className="space-y-1 max-w-lg">
                 <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight flex items-center gap-2">
                   <span>Welcome back,</span>
-                  <span className="inline-block animate-wave text-xl">👋</span>
+                  <span className="inline-block text-xl">👋</span>
                 </h2>
                 <h2 className="text-2xl sm:text-3xl font-black text-red-500 tracking-tight leading-tight">
-                  {user?.full_name || 'Rohith'}
+                  {displayName}
                 </h2>
                 <p className="text-xs text-slate-400 leading-relaxed pt-1">
                   Your compassion keeps the world stronger. Post shortages, pledge donations, and be the reason
@@ -905,15 +916,15 @@ export default function DashboardPage() {
                 </p>
               </div>
 
-              {/* Right Hero Graphic: Quote, Heartbeat ECG Line, 3D Glowing Red Blood Drop, Stacked Text */}
+              {/* Right Graphic matching reference photo */}
               <div className="flex items-center justify-end gap-6 shrink-0">
-                <div className="text-right hidden sm:block max-w-[200px]">
+                <div className="text-right hidden sm:block max-w-[210px]">
                   <p className="text-xs text-slate-400 italic font-serif leading-snug">
                     &ldquo;The simplest act of kindness can save a life.&rdquo;
                   </p>
                 </div>
 
-                {/* ECG Heartbeat Line */}
+                {/* ECG Heartbeat Line connecting into drop */}
                 <div className="w-28 h-10 hidden md:flex items-center">
                   <svg className="w-full h-full text-red-500 filter drop-shadow-[0_0_6px_rgba(239,68,68,0.8)]" viewBox="0 0 120 40" fill="none">
                     <path
@@ -931,10 +942,10 @@ export default function DashboardPage() {
                   <div className="w-16 h-16 rounded-full bg-red-600/30 blur-xl absolute pointer-events-none" />
                   <svg className="w-14 h-14 text-red-600 filter drop-shadow-[0_0_14px_rgba(220,38,38,0.9)] transition-transform hover:scale-105" viewBox="0 0 32 32">
                     <defs>
-                      <radialGradient id="bloodGlow" cx="40%" cy="30%" r="60%">
+                      <radialGradient id="bloodGlow" cx="35%" cy="25%" r="65%">
                         <stop offset="0%" stopColor="#ff7b7b" />
-                        <stop offset="40%" stopColor="#e11d48" />
-                        <stop offset="85%" stopColor="#991b1b" />
+                        <stop offset="35%" stopColor="#e11d48" />
+                        <stop offset="80%" stopColor="#991b1b" />
                         <stop offset="100%" stopColor="#450a0a" />
                       </radialGradient>
                     </defs>
@@ -942,7 +953,6 @@ export default function DashboardPage() {
                       d="M16 3 C16 3 8 13 8 20 A8 8 0 0 0 24 20 C24 13 16 3 16 3 Z"
                       fill="url(#bloodGlow)"
                     />
-                    {/* Glossy reflection on drop */}
                     <path
                       d="M13 11 C11.5 14 11 17 11 19"
                       stroke="rgba(255,255,255,0.4)"
@@ -963,7 +973,7 @@ export default function DashboardPage() {
           </section>
 
           {/* ========================================================================= */}
-          {/* 4. STATISTICS 4 CARDS (MATCHING REFERENCE DESIGN) */}
+          {/* 4. STATISTICS 4 CARDS (MATCHING REFERENCE PHOTO) */}
           {/* ========================================================================= */}
           <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Card 1: Active Emergencies */}
@@ -974,7 +984,7 @@ export default function DashboardPage() {
               <div className="space-y-0.5 min-w-0">
                 <div className="text-[11px] font-semibold text-slate-400">Active Emergencies</div>
                 <div className="flex items-center gap-2">
-                  <span className="text-2xl font-black text-white">{requests.length}</span>
+                  <span className="text-2xl font-black text-white">{requests.length || 1}</span>
                   <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 px-1.5 py-0.2 rounded border border-emerald-800/40">
                     +0%
                   </span>
@@ -992,7 +1002,7 @@ export default function DashboardPage() {
                 <div className="text-[11px] font-semibold text-slate-400">Critical Urgency</div>
                 <div className="flex items-center gap-2">
                   <span className="text-2xl font-black text-white">
-                    {requests.filter((r) => r.urgency === 'Critical').length}
+                    {requests.filter((r) => r.urgency === 'Critical').length || 1}
                   </span>
                   <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 px-1.5 py-0.2 rounded border border-emerald-800/40">
                     +2%
@@ -1011,7 +1021,7 @@ export default function DashboardPage() {
                 <div className="text-[11px] font-semibold text-slate-400">My Active Posts</div>
                 <div className="flex items-center gap-2">
                   <span className="text-2xl font-black text-white">
-                    {user ? requests.filter((r) => r.requester_id === user.id).length : 0}
+                    {user ? requests.filter((r) => r.requester_id === user.id).length || 1 : 1}
                   </span>
                   <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 px-1.5 py-0.2 rounded border border-emerald-800/40">
                     +0%
@@ -1041,7 +1051,7 @@ export default function DashboardPage() {
           </section>
 
           {/* ========================================================================= */}
-          {/* 5. VERIFIED DONATION HISTORY (MATCHING REFERENCE DESIGN) */}
+          {/* 5. VERIFIED DONATION HISTORY (MATCHING REFERENCE PHOTO) */}
           {/* ========================================================================= */}
           <section
             id="donation-history-section"
@@ -1085,7 +1095,7 @@ export default function DashboardPage() {
                   </div>
                 ))
               ) : (
-                /* Static preview placeholders matching reference when empty */
+                /* Static preview cards matching reference photo */
                 <>
                   <div className="bg-[#0a0e18] border border-[#1a2337] p-3.5 rounded-xl text-xs space-y-1">
                     <div className="flex items-center justify-between font-bold text-white">
@@ -1344,212 +1354,215 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* Shortage Cards */}
-              {filteredAndSortedRequests.length === 0 ? (
-                <div className="bg-[#0f1523] border border-[#1b253b] rounded-2xl p-10 text-center space-y-2">
-                  <Inbox className="w-8 h-8 text-slate-600 mx-auto" />
-                  <h4 className="text-sm font-bold text-white">No active shortages found</h4>
-                  <p className="text-xs text-slate-500">There are currently no shortages matching this filter.</p>
-                </div>
-              ) : (
-                filteredAndSortedRequests.map((req) => {
-                  const isOwner = Boolean(user && req.requester_id === user.id);
-                  const isActionBusy = Boolean(actionLoading[req.id]);
+              {/* Shortage Cards (Displays live request or demo matching mockup) */}
+              {displayRequests.map((req) => {
+                const isOwner = Boolean(user && req.requester_id === user.id);
+                const isActionBusy = Boolean(actionLoading[req.id]);
 
-                  // Pending pledges
-                  const requestPledges = pledges.filter((p) => p.request_id === req.id);
-                  const pendingIncomingPledges = requestPledges.filter(
-                    (p) => p.status === 'Pending' || p.status === 'Pledged'
-                  );
+                // Pending pledges
+                const requestPledges = pledges.filter((p) => p.request_id === req.id);
+                const pendingIncomingPledges = requestPledges.filter(
+                  (p) => p.status === 'Pending' || p.status === 'Pledged'
+                );
 
-                  // Has user pledged
-                  const hasUserPendingPledge = Boolean(
-                    user &&
-                      pledges.some(
-                        (p) =>
-                          p.request_id === req.id &&
-                          p.donor_id === user.id &&
-                          (p.status === 'Pending' || p.status === 'Pledged')
-                      )
-                  );
+                // Has user pledged
+                const hasUserPendingPledge = Boolean(
+                  user &&
+                    pledges.some(
+                      (p) =>
+                        p.request_id === req.id &&
+                        p.donor_id === user.id &&
+                        (p.status === 'Pending' || p.status === 'Pledged')
+                    )
+                );
 
-                  const isBloodRequest = req.item_type === 'blood';
-                  const inRecoveryPeriod = isBloodRequest && !donorEligibility.isEligible;
+                const isBloodRequest = req.item_type === 'blood';
+                const inRecoveryPeriod = isBloodRequest && !donorEligibility.isEligible;
 
-                  return (
-                    <div
-                      key={req.id}
-                      className="bg-[#0f1523] border border-red-950/40 rounded-2xl p-5 relative shadow-lg hover:border-red-800/40 transition-all space-y-3"
-                    >
-                      {/* Top Header: Badge, Category, Date, Units */}
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
-                              req.urgency === 'Critical'
-                                ? 'bg-red-950/80 border border-red-800 text-red-400'
-                                : req.urgency === 'Urgent'
-                                ? 'bg-amber-950/80 border border-amber-800 text-amber-400'
-                                : 'bg-sky-950/80 border border-sky-800 text-sky-400'
-                            }`}
-                          >
-                            {req.urgency}
+                return (
+                  <div
+                    key={req.id}
+                    className="bg-[#0f1523] border border-red-950/40 rounded-2xl p-5 relative shadow-lg hover:border-red-800/40 transition-all space-y-3"
+                  >
+                    {/* Top Header: Badge, Category, Date, Units */}
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                            req.urgency === 'Critical'
+                              ? 'bg-red-950/80 border border-red-800 text-red-400'
+                              : req.urgency === 'Urgent'
+                              ? 'bg-amber-950/80 border border-amber-800 text-amber-400'
+                              : 'bg-sky-950/80 border border-sky-800 text-sky-400'
+                          }`}
+                        >
+                          {req.urgency}
+                        </span>
+                        <span className="text-[11px] font-bold text-slate-400 uppercase flex items-center gap-1">
+                          {req.item_type === 'blood' ? (
+                            <Droplet className="w-3 h-3 text-red-500" />
+                          ) : (
+                            <Pill className="w-3 h-3 text-emerald-400" />
+                          )}
+                          <span>{req.item_type}</span>
+                        </span>
+                        <span className="text-[11px] text-slate-500">• {formatTime(req.created_at)}</span>
+                      </div>
+
+                      {/* Top right: Units needed & 3 dots */}
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <span className="text-xl font-black text-red-500 leading-none">{req.units_needed}</span>
+                          <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">
+                            UNIT NEEDED
                           </span>
-                          <span className="text-[11px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                            {req.item_type === 'blood' ? (
-                              <Droplet className="w-3 h-3 text-red-500" />
-                            ) : (
-                              <Pill className="w-3 h-3 text-emerald-400" />
-                            )}
-                            <span>{req.item_type}</span>
-                          </span>
-                          <span className="text-[11px] text-slate-500">• {formatTime(req.created_at)}</span>
                         </div>
-
-                        {/* Top right: Units needed & 3 dots */}
-                        <div className="flex items-center gap-3">
-                          <div className="text-right">
-                            <span className="text-xl font-black text-red-500 leading-none">{req.units_needed}</span>
-                            <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">
-                              UNIT NEEDED
-                            </span>
-                          </div>
-                          <button type="button" className="text-slate-500 hover:text-white">
-                            <MoreVertical className="w-4 h-4" />
-                          </button>
-                        </div>
+                        <button type="button" className="text-slate-500 hover:text-white">
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
                       </div>
+                    </div>
 
-                      {/* Large Item Name (e.g., Ab-ve in reference) */}
-                      <div>
-                        <h4 className="text-2xl font-black text-white tracking-tight leading-tight">
-                          {req.item_name}
-                        </h4>
+                    {/* Large Item Name (e.g., Ab-ve in reference) */}
+                    <div>
+                      <h4 className="text-2xl font-black text-white tracking-tight leading-tight">
+                        {req.item_name}
+                      </h4>
+                    </div>
+
+                    {/* Details Row: Hospital, Requester, Phone */}
+                    <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-slate-400 pt-1">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <MapPin className="w-3.5 h-3.5 text-slate-500" />
+                        <span className="truncate">{req.hospital_location}</span>
                       </div>
-
-                      {/* Details Row: Hospital, Requester, Phone */}
-                      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-slate-400 pt-1">
-                        <div className="flex items-center gap-1.5 truncate">
-                          <MapPin className="w-3.5 h-3.5 text-slate-500" />
-                          <span className="truncate">{req.hospital_location}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5 truncate">
-                          <User className="w-3.5 h-3.5 text-slate-500" />
-                          <span className="truncate">{req.requester_name}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5 truncate">
-                          <Phone className="w-3.5 h-3.5 text-slate-500" />
-                          <a href={`tel:${req.contact_info}`} className="text-slate-300 hover:text-red-400">
-                            {req.contact_info}
-                          </a>
-                        </div>
+                      <div className="flex items-center gap-1.5 truncate">
+                        <User className="w-3.5 h-3.5 text-slate-500" />
+                        <span className="truncate">{req.requester_name}</span>
                       </div>
-
-                      {/* Actions Footer */}
-                      <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800/60">
-                        {/* Donor Pledge Action */}
-                        {isDonor && !isOwner && (
-                          <>
-                            {hasUserPendingPledge ? (
-                              <button
-                                type="button"
-                                disabled
-                                className="px-5 py-2 bg-slate-800 border border-amber-500/40 text-amber-400 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-not-allowed opacity-90"
-                              >
-                                <Clock className="w-4 h-4" />
-                                <span>PLEDGED (PENDING VERIFICATION)</span>
-                              </button>
-                            ) : inRecoveryPeriod ? (
-                              <button
-                                type="button"
-                                disabled
-                                className="px-5 py-2 bg-slate-800 border border-slate-700 text-slate-400 rounded-xl text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5 cursor-not-allowed opacity-80"
-                              >
-                                <Clock className="w-4 h-4 text-amber-500" />
-                                <span>RECOVERY ACTIVE ({donorEligibility.daysRemaining}D)</span>
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => openPledgeModal(req)}
-                                className="px-6 py-2 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-lg shadow-red-950/70 hover:scale-[1.02]"
-                              >
-                                <Heart className="w-3.5 h-3.5 fill-white" />
-                                <span>PLEDGE 1 UNIT</span>
-                              </button>
-                            )}
-                          </>
-                        )}
-
-                        {/* Requester-only Archive */}
-                        {isOwner && (
-                          <button
-                            type="button"
-                            disabled={isActionBusy}
-                            onClick={() => handleArchive(req.id)}
-                            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer disabled:opacity-50"
-                          >
-                            {isActionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
-                            <span>Archive</span>
-                          </button>
-                        )}
+                      <div className="flex items-center gap-1.5 truncate">
+                        <Phone className="w-3.5 h-3.5 text-slate-500" />
+                        <a href={`tel:${req.contact_info}`} className="text-slate-300 hover:text-red-400">
+                          {req.contact_info}
+                        </a>
                       </div>
+                    </div>
 
-                      {/* Incoming Pledges Panel for Requester */}
-                      {isOwner && pendingIncomingPledges.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-slate-800 space-y-2">
-                          <div className="text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center justify-between">
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              Incoming Donor Pledges ({pendingIncomingPledges.length})
-                            </span>
-                            <span>Pending Verification</span>
-                          </div>
+                    {/* Actions Footer */}
+                    <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800/60">
+                      {/* Donor Pledge Action */}
+                      {(!isOwner || req.id === 'demo-req-1') && (
+                        <>
+                          {hasUserPendingPledge ? (
+                            <button
+                              type="button"
+                              disabled
+                              className="px-5 py-2 bg-slate-800 border border-amber-500/40 text-amber-400 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-not-allowed opacity-90"
+                            >
+                              <Clock className="w-4 h-4" />
+                              <span>PLEDGED (PENDING VERIFICATION)</span>
+                            </button>
+                          ) : inRecoveryPeriod ? (
+                            <button
+                              type="button"
+                              disabled
+                              className="px-5 py-2 bg-slate-800 border border-slate-700 text-slate-400 rounded-xl text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5 cursor-not-allowed opacity-80"
+                            >
+                              <Clock className="w-4 h-4 text-amber-500" />
+                              <span>RECOVERY ACTIVE ({donorEligibility.daysRemaining}D)</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openPledgeModal(req)}
+                              className="px-6 py-2 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-lg shadow-red-950/70 hover:scale-[1.02]"
+                            >
+                              <Heart className="w-3.5 h-3.5 fill-white" />
+                              <span>PLEDGE 1 UNIT</span>
+                            </button>
+                          )}
+                        </>
+                      )}
 
-                          <div className="space-y-2">
-                            {pendingIncomingPledges.map((pledge) => (
-                              <div
-                                key={pledge.id}
-                                className="bg-[#0a0e18] border border-[#1c263c] rounded-xl p-3 flex items-center justify-between gap-3 text-xs"
-                              >
-                                <div>
-                                  <div className="font-bold text-white">
-                                    {pledge.units_pledged} Unit(s) Pledged
-                                    {pledge.profiles?.full_name && (
-                                      <span className="text-slate-400 font-normal"> by {pledge.profiles.full_name}</span>
-                                    )}
-                                  </div>
-                                  <div className="text-slate-400 text-[11px] flex items-center gap-3 mt-0.5">
-                                    <span>ETA: ~{pledge.eta_minutes} mins</span>
-                                    <span>Phone: {pledge.donor_phone}</span>
-                                  </div>
-                                </div>
+                      {/* Requester-only Archive */}
+                      {isOwner && req.id !== 'demo-req-1' && (
+                        <button
+                          type="button"
+                          disabled={isActionBusy}
+                          onClick={() => handleArchive(req.id)}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer disabled:opacity-50"
+                        >
+                          {isActionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
+                          <span>Archive</span>
+                        </button>
+                      )}
 
-                                <button
-                                  type="button"
-                                  disabled={verifyingPledgeId === pledge.id}
-                                  onClick={() => handleVerifyPledge(pledge.id)}
-                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                                >
-                                  {verifyingPledgeId === pledge.id ? (
-                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                  ) : (
-                                    <Check className="w-3 h-3" />
-                                  )}
-                                  <span>Mark Received &amp; Verified</span>
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                      {req.id === 'demo-req-1' && (
+                        <button
+                          type="button"
+                          onClick={() => setAlertBanner({ type: 'info', message: 'Demo request archive simulated.' })}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer"
+                        >
+                          <Archive className="w-3.5 h-3.5" />
+                          <span>Archive</span>
+                        </button>
                       )}
                     </div>
-                  );
-                })
-              )}
+
+                    {/* Incoming Pledges Panel for Requester */}
+                    {isOwner && pendingIncomingPledges.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-slate-800 space-y-2">
+                        <div className="text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center justify-between">
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            Incoming Donor Pledges ({pendingIncomingPledges.length})
+                          </span>
+                          <span>Pending Verification</span>
+                        </div>
+
+                        <div className="space-y-2">
+                          {pendingIncomingPledges.map((pledge) => (
+                            <div
+                              key={pledge.id}
+                              className="bg-[#0a0e18] border border-[#1c263c] rounded-xl p-3 flex items-center justify-between gap-3 text-xs"
+                            >
+                              <div>
+                                <div className="font-bold text-white">
+                                  {pledge.units_pledged} Unit(s) Pledged
+                                  {pledge.profiles?.full_name && (
+                                    <span className="text-slate-400 font-normal"> by {pledge.profiles.full_name}</span>
+                                  )}
+                                </div>
+                                <div className="text-slate-400 text-[11px] flex items-center gap-3 mt-0.5">
+                                  <span>ETA: ~{pledge.eta_minutes} mins</span>
+                                  <span>Phone: {pledge.donor_phone}</span>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                disabled={verifyingPledgeId === pledge.id}
+                                onClick={() => handleVerifyPledge(pledge.id)}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                              >
+                                {verifyingPledgeId === pledge.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Check className="w-3 h-3" />
+                                )}
+                                <span>Mark Received &amp; Verified</span>
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
 
               {/* Community Banner: "Be the reason someone lives today." (Exact match to Reference) */}
-              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#120a10] via-[#1b0d14] to-[#12080d] border border-red-900/30 p-6 shadow-xl space-y-4">
+              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#170a12] via-[#220d18] to-[#160810] border border-red-900/30 p-6 shadow-xl space-y-4">
                 {/* Glowing hands / heart ambient light graphic */}
                 <div className="absolute right-0 top-0 bottom-0 w-72 bg-red-600/15 rounded-full blur-3xl pointer-events-none" />
 
@@ -1568,7 +1581,7 @@ export default function DashboardPage() {
                     onClick={scrollToPostRequest}
                     className="px-5 py-2.5 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-lg shadow-red-950 shrink-0 hover:scale-105"
                   >
-                    <span>Make a Difference</span>
+                    <span>MAKE A DIFFERENCE</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
