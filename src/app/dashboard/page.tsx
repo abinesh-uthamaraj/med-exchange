@@ -83,21 +83,18 @@ export default function DashboardPage() {
         }
       }
 
-      // Fetch active requests
       const res = await fetch('/api/requests');
       if (res.ok) {
         const fetchedReqs = (await res.json()) as MedicalRequest[];
         if (Array.isArray(fetchedReqs)) setRequests(fetchedReqs);
       }
 
-      // Fetch active pledges
       const pledgeRes = await fetch('/api/pledges');
       if (pledgeRes.ok) {
         const pledgesData = await pledgeRes.json();
         if (Array.isArray(pledgesData)) setIncomingPledges(pledgesData);
       }
 
-      // Fetch verified history for donor
       const { data: hist } = await supabase
         .from('donation_history')
         .select('*')
@@ -114,7 +111,6 @@ export default function DashboardPage() {
   useEffect(() => {
     loadData();
 
-    // Instant Realtime updates for both requests and pledges
     const channel = supabase
       .channel('realtime-dashboard-feed')
       .on(
@@ -196,6 +192,17 @@ export default function DashboardPage() {
     e.preventDefault();
     if (!pledgeTarget) return;
     setPledgeError(null);
+
+    // 90-day medical interval safety check
+    if (pledgeTarget.item_type === 'blood' && lastDonationDate) {
+      const lastDate = new Date(lastDonationDate);
+      const diffDays = Math.floor((Date.now() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays < 90) {
+        setPledgeError(`Standard clinical guidance requires a 90-day recovery period between whole-blood donations. You have ${90 - diffDays} day(s) remaining.`);
+        return;
+      }
+    }
+
     setPledging(true);
 
     try {
@@ -213,7 +220,7 @@ export default function DashboardPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Pledge failed');
 
-      alert('Pledge confirmed! The requester will instantly see your contact details and arrival ETA.');
+      alert('Pledge confirmed! The requester will see your contact details and arrival ETA.');
       setPledgeTarget(null);
       loadData();
     } catch (err) {
@@ -239,7 +246,7 @@ export default function DashboardPage() {
         throw new Error(json.error ?? 'Verification failed');
       }
 
-      alert('Verified! Blood/Medicine marked as received and added to donor history.');
+      alert('Donation verified! Units updated and logged to donor history.');
       loadData();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Error verifying donation');
@@ -317,178 +324,175 @@ export default function DashboardPage() {
       <main className="max-w-7xl mx-auto px-4 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* Left Column: Form & Donor History */}
+          {/* Left Column: Post Form (Available for ALL authenticated roles) & Eligibility */}
           <div className="lg:col-span-1 space-y-6">
             
-            {user?.role !== 'donor' ? (
-              <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
-                <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                  <PlusCircle className="w-5 h-5 text-red-500" />
-                  Post Emergency Request
-                </h2>
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
+              <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                <PlusCircle className="w-5 h-5 text-red-500" />
+                Post Emergency Request
+              </h2>
 
-                {formError && <div className="mb-4 p-2 bg-red-950 text-red-300 rounded text-xs">{formError}</div>}
-                {formSuccess && <div className="mb-4 p-2 bg-emerald-950 text-emerald-300 rounded text-xs">{formSuccess}</div>}
+              {formError && <div className="mb-4 p-2 bg-red-950 text-red-300 rounded text-xs">{formError}</div>}
+              {formSuccess && <div className="mb-4 p-2 bg-emerald-950 text-emerald-300 rounded text-xs">{formSuccess}</div>}
 
-                <form onSubmit={handlePostRequest} className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Category</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setItemType('blood')}
-                        className={`py-2 text-xs font-semibold rounded-lg border ${
-                          itemType === 'blood' ? 'bg-red-600 border-red-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
-                        }`}
-                      >
-                        <Droplet className="w-3.5 h-3.5 inline mr-1" /> Blood
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setItemType('medicine')}
-                        className={`py-2 text-xs font-semibold rounded-lg border ${
-                          itemType === 'medicine' ? 'bg-red-600 border-red-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
-                        }`}
-                      >
-                        <Pill className="w-3.5 h-3.5 inline mr-1" /> Medicine
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Item / Blood Group</label>
-                    <input
-                      type="text"
-                      required
-                      value={itemName}
-                      onChange={(e) => setItemName(e.target.value)}
-                      placeholder="e.g. O-Negative or IVIG"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
-                    />
-                  </div>
-
+              <form onSubmit={handlePostRequest} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Category</label>
                   <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">Units Needed</label>
-                      <input
-                        type="number"
-                        min={1}
-                        required
-                        value={unitsNeeded}
-                        onChange={(e) => setUnitsNeeded(Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">Urgency</label>
-                      <select
-                        value={urgency}
-                        onChange={(e) => setUrgency(e.target.value as any)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-sm text-slate-100"
-                      >
-                        <option value="Critical">Critical</option>
-                        <option value="Urgent">Urgent</option>
-                        <option value="Standard">Standard</option>
-                      </select>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setItemType('blood')}
+                      className={`py-2 text-xs font-semibold rounded-lg border cursor-pointer ${
+                        itemType === 'blood' ? 'bg-red-600 border-red-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                      }`}
+                    >
+                      <Droplet className="w-3.5 h-3.5 inline mr-1" /> Blood
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setItemType('medicine')}
+                      className={`py-2 text-xs font-semibold rounded-lg border cursor-pointer ${
+                        itemType === 'medicine' ? 'bg-red-600 border-red-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                      }`}
+                    >
+                      <Pill className="w-3.5 h-3.5 inline mr-1" /> Medicine
+                    </button>
                   </div>
+                </div>
 
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Item / Blood Group</label>
+                  <input
+                    type="text"
+                    required
+                    value={itemName}
+                    onChange={(e) => setItemName(e.target.value)}
+                    placeholder="e.g. O-Negative or IVIG"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Hospital Location</label>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">Units Needed</label>
                     <input
-                      type="text"
+                      type="number"
+                      min={1}
                       required
-                      value={hospitalLocation}
-                      onChange={(e) => setHospitalLocation(e.target.value)}
-                      placeholder="e.g. Apollo Ward 4"
+                      value={unitsNeeded}
+                      onChange={(e) => setUnitsNeeded(Number(e.target.value))}
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
                     />
                   </div>
-
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Emergency Phone</label>
-                    <input
-                      type="tel"
-                      required
-                      value={contactInfo}
-                      onChange={(e) => setContactInfo(e.target.value)}
-                      placeholder="+91 9876543210"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
-                    />
+                    <label className="block text-xs font-medium text-slate-300 mb-1">Urgency</label>
+                    <select
+                      value={urgency}
+                      onChange={(e) => setUrgency(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-sm text-slate-100"
+                    >
+                      <option value="Critical">Critical</option>
+                      <option value="Urgent">Urgent</option>
+                      <option value="Standard">Standard</option>
+                    </select>
                   </div>
+                </div>
 
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold text-sm transition-colors"
-                  >
-                    {submitting ? 'Publishing...' : 'Publish Emergency Request'}
-                  </button>
-                </form>
-              </div>
-            ) : (
-              <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
-                <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-red-500" />
-                  Donation Eligibility Status
-                </h3>
-                {eligibility.eligible ? (
-                  <div className="p-3 bg-emerald-950/60 border border-emerald-800/40 rounded-lg">
-                    <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-4 h-4" /> Eligible to Donate
-                    </span>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      You meet all medical safety interval criteria.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="p-3 bg-amber-950/60 border border-amber-800/40 rounded-lg">
-                    <span className="text-xs text-amber-400 font-semibold flex items-center gap-1">
-                      <ShieldAlert className="w-4 h-4" /> 90-Day Recovery Period
-                    </span>
-                    <p className="text-[11px] text-slate-300 mt-1">
-                      Next eligible in <strong className="text-white">{eligibility.daysRemaining} days</strong>.
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Hospital Location</label>
+                  <input
+                    type="text"
+                    required
+                    value={hospitalLocation}
+                    onChange={(e) => setHospitalLocation(e.target.value)}
+                    placeholder="e.g. Apollo Ward 4"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Emergency Phone</label>
+                  <input
+                    type="tel"
+                    required
+                    value={contactInfo}
+                    onChange={(e) => setContactInfo(e.target.value)}
+                    placeholder="+91 9876543210"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold text-sm transition-colors cursor-pointer"
+                >
+                  {submitting ? 'Publishing...' : 'Publish Emergency Request'}
+                </button>
+              </form>
+            </div>
+
+            {/* Donation Eligibility Card */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
+              <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-red-500" />
+                Donation Eligibility Status
+              </h3>
+              {eligibility.eligible ? (
+                <div className="p-3 bg-emerald-950/60 border border-emerald-800/40 rounded-lg">
+                  <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" /> Eligible to Donate
+                  </span>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    You meet all medical recovery timeline criteria.
+                  </p>
+                </div>
+              ) : (
+                <div className="p-3 bg-amber-950/60 border border-amber-800/40 rounded-lg">
+                  <span className="text-xs text-amber-400 font-semibold flex items-center gap-1">
+                    <ShieldAlert className="w-4 h-4" /> 90-Day Recovery Period
+                  </span>
+                  <p className="text-[11px] text-slate-300 mt-1">
+                    Next eligible in <strong className="text-white">{eligibility.daysRemaining} days</strong>.
+                  </p>
+                </div>
+              )}
+            </div>
 
             {/* Donor Donation History Log */}
-            {user?.role === 'donor' && (
-              <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
-                <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
-                  <History className="w-4 h-4 text-emerald-400" />
-                  Verified Donation History
-                </h3>
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
+              <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                <History className="w-4 h-4 text-emerald-400" />
+                Verified Donation History
+              </h3>
 
-                {donationHistory.length === 0 ? (
-                  <p className="text-xs text-slate-500">No verified donation records yet.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {donationHistory.map((item) => (
-                      <div key={item.id} className="p-2.5 bg-slate-950 border border-slate-800 rounded-lg text-xs">
-                        <div className="font-semibold text-slate-200">{item.item_name} ({item.units_donated} Unit)</div>
-                        <div className="text-slate-400">{item.hospital_location}</div>
-                        <div className="text-[10px] text-emerald-400 mt-1">
-                          Verified on {new Date(item.verified_at).toLocaleDateString()}
-                        </div>
+              {donationHistory.length === 0 ? (
+                <p className="text-xs text-slate-500">No verified donation records yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {donationHistory.map((item) => (
+                    <div key={item.id} className="p-2.5 bg-slate-950 border border-slate-800 rounded-lg text-xs">
+                      <div className="font-semibold text-slate-200">{item.item_name} ({item.units_donated} Unit)</div>
+                      <div className="text-slate-400">{item.hospital_location}</div>
+                      <div className="text-[10px] text-emerald-400 mt-1">
+                        Verified on {new Date(item.verified_at).toLocaleDateString()}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Right Column: Feed and Incoming Pledges */}
+          {/* Right Column: Live Feed and Incoming Pledges */}
           <div className="lg:col-span-2 space-y-6">
             <div className="flex flex-wrap gap-2">
               {(['all', 'blood', 'medicine', 'critical', 'mine'] as Filter[]).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveFilter(tab)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize cursor-pointer ${
                     activeFilter === tab ? 'bg-red-600 text-white' : 'bg-slate-900 text-slate-400 border border-slate-800'
                   }`}
                 >
@@ -527,20 +531,18 @@ export default function DashboardPage() {
                         <div><Phone className="w-3.5 h-3.5 inline mr-1 text-slate-500" />{req.contact_info}</div>
                       </div>
 
-                      {/* Donor Action */}
-                      {user?.role === 'donor' && req.requester_id !== user.id && (
-                        <div className="pt-3 border-t border-slate-800 flex justify-end">
-                          <button
-                            onClick={() => setPledgeTarget(req)}
-                            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
-                          >
-                            <HeartHandshake className="w-4 h-4" />
-                            Pledge {req.item_type === 'blood' ? 'Blood' : 'Medicine'}
-                          </button>
-                        </div>
-                      )}
+                      {/* Donor Pledge Action: Visible to all authenticated users for self-testing */}
+                      <div className="pt-3 border-t border-slate-800 flex justify-end">
+                        <button
+                          onClick={() => setPledgeTarget(req)}
+                          className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                        >
+                          <HeartHandshake className="w-4 h-4" />
+                          Pledge {req.item_type === 'blood' ? 'Blood' : 'Medicine'}
+                        </button>
+                      </div>
 
-                      {/* Requester Action: Automatically shows pledges with contact & time */}
+                      {/* Requester View: Incoming Pledges with Verification Control */}
                       {user && req.requester_id === user.id && (
                         <div className="pt-3 border-t border-slate-800 space-y-3">
                           <div className="flex justify-between items-center">
@@ -568,11 +570,10 @@ export default function DashboardPage() {
                                       <Clock className="w-3 h-3" /> ETA: Reaching in ~{p.eta_minutes} mins
                                     </div>
                                     <div className="text-[10px] text-slate-500">
-                                      Pledged at: {new Date(p.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({new Date(p.created_at).toLocaleDateString()})
+                                      Pledged at: {new Date(p.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                     </div>
                                   </div>
 
-                                  {/* Verification Button (Requester can click anytime upon receipt) */}
                                   <button
                                     disabled={actionLoading[p.id]}
                                     onClick={() => handleVerifyPledge(p.id)}
@@ -629,7 +630,7 @@ export default function DashboardPage() {
                 </label>
                 <input
                   type="number"
-                  min={5}
+                  min={1}
                   required
                   value={etaMinutes}
                   onChange={(e) => setEtaMinutes(Number(e.target.value))}
@@ -650,7 +651,7 @@ export default function DashboardPage() {
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
                   />
                   <span className="text-[10px] text-slate-500">
-                    Medical guidelines recommend a 90-day interval between blood donations.
+                    Standard clinical guidance requires a 90-day recovery period between whole-blood donations.
                   </span>
                 </div>
               )}
