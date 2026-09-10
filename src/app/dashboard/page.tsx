@@ -324,9 +324,10 @@ export default function DashboardPage() {
       <main className="max-w-7xl mx-auto px-4 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* Left Column: Post Form (Available for ALL authenticated roles) & Eligibility */}
+          {/* Left Column: Post Form (Visible to all roles) & Eligibility */}
           <div className="lg:col-span-1 space-y-6">
             
+            {/* 1. Request Form */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
               <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
                 <PlusCircle className="w-5 h-5 text-red-500" />
@@ -433,7 +434,7 @@ export default function DashboardPage() {
               </form>
             </div>
 
-            {/* Donation Eligibility Card */}
+            {/* 2. Donation Eligibility Card */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
               <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-red-500" />
@@ -445,7 +446,7 @@ export default function DashboardPage() {
                     <CheckCircle2 className="w-4 h-4" /> Eligible to Donate
                   </span>
                   <p className="text-[11px] text-slate-400 mt-1">
-                    You meet all medical recovery timeline criteria.
+                    You meet all medical safety interval criteria.
                   </p>
                 </div>
               ) : (
@@ -460,7 +461,7 @@ export default function DashboardPage() {
               )}
             </div>
 
-            {/* Donor Donation History Log */}
+            {/* 3. Donor Donation History Log */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
               <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
                 <History className="w-4 h-4 text-emerald-400" />
@@ -531,7 +532,7 @@ export default function DashboardPage() {
                         <div><Phone className="w-3.5 h-3.5 inline mr-1 text-slate-500" />{req.contact_info}</div>
                       </div>
 
-                      {/* Donor Pledge Action: Visible to all authenticated users for self-testing */}
+                      {/* Donor Pledge Action: Visible on all active requests */}
                       <div className="pt-3 border-t border-slate-800 flex justify-end">
                         <button
                           onClick={() => setPledgeTarget(req)}
