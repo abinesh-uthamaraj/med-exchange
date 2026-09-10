@@ -1,43 +1,66 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
-import { MedicalRequest, Pledge } from '@/types/database.types';
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+export async function GET() {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const { data, error } = await supabase
+      .from("pledges")
+      .select("*, profiles:donor_id(full_name, phone_number)")
+      .eq("status", "Pledged");
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(data, { status: 200 });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Internal Server Error" },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (!user || authError) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!user || authError) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { request_id, units_pledged } = await request.json();
-    if (!request_id || typeof units_pledged !== 'number' || units_pledged < 1) {
-      return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
+    const { request_id, eta_minutes, last_donation_date, donor_phone } = await request.json();
+
+    if (!request_id || !eta_minutes || Number(eta_minutes) < 1) {
+      return NextResponse.json({ error: "Please provide a valid estimated arrival time." }, { status: 400 });
     }
 
-    const { data: targetReq, error: fetchErr } = await supabase.from('requests').select('*').eq('id', request_id).single();
-    if (fetchErr) return NextResponse.json({ error: fetchErr.code === 'PGRST116' ? 'Request not found' : fetchErr.message }, { status: fetchErr.code === 'PGRST116' ? 404 : 500 });
+    // 90-day medical interval check
+    if (last_donation_date) {
+      const lastDate = new Date(last_donation_date);
+      const diffDays = Math.floor((Date.now() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays < 90) {
+        return NextResponse.json({
+          error: `Medical guidelines require a 90-day gap between donations. You must wait ${90 - diffDays} more day(s).`
+        }, { status: 400 });
+      }
+    }
 
-    const medicalReq = targetReq as MedicalRequest;
-    if (medicalReq.status !== 'Active') return NextResponse.json({ error: 'Request is no longer active' }, { status: 400 });
-    if (units_pledged > medicalReq.units_needed) return NextResponse.json({ error: 'Pledged units exceed needed amount' }, { status: 400 });
-
-    const { data: pledgeData, error: pledgeErr } = await supabase.from('pledges').insert({
+    // Insert the pledge with ETA and phone
+    const { data, error } = await supabase.from("pledges").insert({
       request_id,
       donor_id: user.id,
-      units_pledged,
-      status: 'Completed',
+      units_pledged: 1,
+      eta_minutes: Number(eta_minutes),
+      donor_phone: donor_phone?.trim() || null,
+      status: "Pledged"
     }).select().single();
-    if (pledgeErr) return NextResponse.json({ error: 'Failed to create pledge' }, { status: 500 });
 
-    const updatedUnits = Math.max(0, medicalReq.units_needed - units_pledged);
-    const newStatus = updatedUnits === 0 ? 'Fulfilled' : 'Active';
-
-    const { data: updatedReq, error: updateErr } = await supabase.from('requests').update({ units_needed: updatedUnits, status: newStatus }).eq('id', request_id).select().single();
-    if (updateErr) {
-      await supabase.from('pledges').delete().eq('id', pledgeData.id);
-      return NextResponse.json({ error: 'Atomic update failed; pledge reverted' }, { status: 500 });
-    }
-    return NextResponse.json(updatedReq, { status: 200 });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(data, { status: 201 });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Internal Server Error" },
+      { status: 500 }
+    );
   }
 }
