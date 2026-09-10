@@ -1,1086 +1,1262 @@
 'use client';
 
-import React, {
-  FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { MedicalRequest, Profile, Pledge, DonationHistory } from '@/types/database.types';
 import {
-  DonationHistory,
-  MedicalRequest,
-  Pledge,
-  Profile,
-} from '@/types/database.types';
-import {
-  AlertCircle,
-  Archive,
-  Calendar,
-  CheckCircle2,
-  Droplets,
-  HeartHandshake,
-  History,
-  Loader2,
-  LogOut,
-  MapPin,
-  Phone,
+  Activity,
+  AlertTriangle,
+  Droplet,
   Pill,
-  Plus,
-  RefreshCw,
-  Send,
-  ShieldAlert,
-  ShieldCheck,
+  MapPin,
   User,
+  Phone,
+  LogOut,
+  PlusCircle,
+  Archive,
+  HeartHandshake,
+  Loader2,
+  Inbox,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  ShieldCheck,
+  Calendar,
+  Check,
   X,
 } from 'lucide-react';
 
-type Urgency = MedicalRequest['urgency'];
+type Filter = 'all' | 'blood' | 'medicine' | 'critical' | 'mine';
 
-interface ApiResponseError {
-  error?: string;
+interface AlertBanner {
+  type: 'success' | 'error' | 'info';
+  message: string;
 }
 
-const URGENCY_ORDER: Record<Urgency, number> = {
-  Critical: 0,
-  Urgent: 1,
-  Standard: 2,
-};
-
-function getTodayISODate(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function getCalendarDayDifference(fromISO: string, toISO: string): number {
-  const from = new Date(`${fromISO}T00:00:00`);
-  const to = new Date(`${toISO}T00:00:00`);
-
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-    return -1;
+function getDonationEligibility(lastDonationDate: string | null | undefined): {
+  isEligible: boolean;
+  daysRemaining: number;
+  daysElapsed: number | null;
+} {
+  if (!lastDonationDate) {
+    return { isEligible: true, daysRemaining: 0, daysElapsed: null };
   }
 
-  return Math.floor((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24));
-}
-
-function formatDate(dateString: string | null | undefined): string {
-  if (!dateString) return 'Not available';
-  return dateString.slice(0, 10);
-}
-
-function formatTime(dateString: string | null | undefined): string {
-  if (!dateString) return '';
-  const match = dateString.match(/T(\d{2}):(\d{2})/);
-  if (!match) return '';
-
-  const hour = Number(match[1]);
-  const minute = match[2];
-  const suffix = hour >= 12 ? 'PM' : 'AM';
-  const displayHour = hour % 12 || 12;
-
-  return `${displayHour}:${minute} ${suffix}`;
-}
-
-function getUrgencyClasses(urgency: Urgency): string {
-  if (urgency === 'Critical') {
-    return 'bg-red-100 text-red-700 border-red-200';
+  const lastDate = new Date(lastDonationDate);
+  if (isNaN(lastDate.getTime())) {
+    return { isEligible: true, daysRemaining: 0, daysElapsed: null };
   }
-  if (urgency === 'Urgent') {
-    return 'bg-orange-100 text-orange-700 border-orange-200';
+
+  const today = new Date();
+  const utcToday = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const utcLast = Date.UTC(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate());
+  const diffDays = Math.floor((utcToday - utcLast) / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 90 && diffDays >= 0) {
+    return { isEligible: false, daysRemaining: 90 - diffDays, daysElapsed: diffDays };
   }
-  return 'bg-blue-100 text-blue-700 border-blue-200';
+
+  return { isEligible: true, daysRemaining: 0, daysElapsed: diffDays };
 }
 
 export default function DashboardPage() {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
 
+  // Authentication & User State
   const [user, setUser] = useState<Profile | null>(null);
+  const [hasProfile, setHasProfile] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [signingOut, setSigningOut] = useState<boolean>(false);
+
+  // Top Alert Banner (Auto-dismiss after 4 seconds)
+  const [alertBanner, setAlertBanner] = useState<AlertBanner | null>(null);
+
+  // Requests, Pledges, and Donation History State
   const [requests, setRequests] = useState<MedicalRequest[]>([]);
   const [pledges, setPledges] = useState<Pledge[]>([]);
   const [donationHistory, setDonationHistory] = useState<DonationHistory[]>([]);
+  const [activeFilter, setActiveFilter] = useState<Filter>('all');
 
-  const [loading, setLoading] = useState<boolean>(true);
-  const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [signingOut, setSigningOut] = useState<boolean>(false);
+  // Request Form State
+  const [itemType, setItemType] = useState<'blood' | 'medicine'>('blood');
+  const [itemName, setItemName] = useState('');
+  const [unitsNeeded, setUnitsNeeded] = useState<number>(1);
+  const [urgency, setUrgency] = useState<'Critical' | 'Urgent' | 'Standard'>('Critical');
+  const [hospitalLocation, setHospitalLocation] = useState('');
+  const [contactInfo, setContactInfo] = useState('');
 
-  const [error, setError] = useState<string>('');
-  const [success, setSuccess] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  // Request form state
-  const [showRequestForm, setShowRequestForm] = useState<boolean>(false);
-  const [requestLoading, setRequestLoading] = useState<boolean>(false);
-  const [itemType, setItemType] = useState<MedicalRequest['item_type']>('blood');
-  const [itemName, setItemName] = useState<string>('');
-  const [unitsNeeded, setUnitsNeeded] = useState<string>('1');
-  const [urgency, setUrgency] = useState<Urgency>('Standard');
-  const [hospitalLocation, setHospitalLocation] = useState<string>('');
-  const [contactInfo, setContactInfo] = useState<string>('');
-
-  // Pledge modal state
-  const [pledgeTarget, setPledgeTarget] = useState<MedicalRequest | null>(null);
-  const [etaMinutes, setEtaMinutes] = useState<string>('30');
-  const [donorPhone, setDonorPhone] = useState<string>('');
-  const [lastDonationDate, setLastDonationDate] = useState<string>('');
-  const [pledgeLoading, setPledgeLoading] = useState<boolean>(false);
-  const [pledgeError, setPledgeError] = useState<string>('');
-
-  // Action guards
+  // Per-Request / Per-Pledge Action State
+  const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
   const [verifyingPledgeId, setVerifyingPledgeId] = useState<string | null>(null);
-  const [archivingRequestId, setArchivingRequestId] = useState<string | null>(null);
 
-  const isDonor = user?.role === 'donor';
+  // Pledge Modal State
+  const [selectedRequestForPledge, setSelectedRequestForPledge] = useState<MedicalRequest | null>(null);
+  const [pledgeUnits, setPledgeUnits] = useState<number>(1);
+  const [pledgeEta, setPledgeEta] = useState<number>(30);
+  const [pledgeLastDate, setPledgeLastDate] = useState<string>('');
+  const [pledgePhone, setPledgePhone] = useState<string>('');
+  const [pledgeSubmitting, setPledgeSubmitting] = useState(false);
+  const [pledgeError, setPledgeError] = useState<string | null>(null);
 
-  const clearMessages = () => {
-    setError('');
-    setSuccess('');
-  };
+  // Hydration Mount State
+  const [mounted, setMounted] = useState<boolean>(false);
 
-  const loadData = useCallback(async () => {
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // DIRECTIVE 4: Auto-dismiss alert banner after 4 seconds
+  useEffect(() => {
+    if (!alertBanner) return;
+    const timer = setTimeout(() => {
+      setAlertBanner(null);
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [alertBanner]);
+
+  // Fetch initial data
+  const fetchData = useCallback(async () => {
     try {
-      setRefreshing(true);
-
       const {
         data: { user: authUser },
         error: authError,
       } = await supabase.auth.getUser();
 
-      if (authError || !authUser) {
+      if (!authUser || authError) {
         router.push('/auth');
         return;
       }
 
-      const { data: profileData, error: profileError } = await supabase
+      // 1. Fetch Profile
+      const { data: profileData, error: profileErr } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', authUser.id)
-        .maybeSingle();
+        .single();
 
-      if (profileError && profileError.code !== 'PGRST116') {
-        throw new Error(profileError.message);
-      }
-
-      const profile = profileData as Profile | null;
-      setUser(profile);
-
-      if (profile?.role === 'donor') {
-        setDonorPhone(profile.phone_number ?? '');
-        setLastDonationDate(profile.last_donation_date ?? '');
-
-        const { data: hist, error: historyError } = await supabase
-          .from('donation_history')
-          .select('*')
-          .eq('donor_id', authUser.id)
-          .order('verified_at', { ascending: false });
-
-        if (historyError) {
-          throw new Error(historyError.message);
+      if (profileErr && profileErr.code === 'PGRST116') {
+        const fallbackProfile: Profile = {
+          id: authUser.id,
+          full_name: authUser.email ?? 'Verified User',
+          role: 'caregiver',
+          hospital_name: null,
+          phone_number: null,
+          blood_group: null,
+          last_donation_date: null,
+          created_at: new Date().toISOString(),
+        };
+        setUser(fallbackProfile);
+        setHasProfile(false);
+      } else if (profileData) {
+        const loadedProfile = profileData as Profile;
+        setUser(loadedProfile);
+        setHasProfile(true);
+        if (loadedProfile.phone_number) {
+          setPledgePhone(loadedProfile.phone_number);
         }
+        if (loadedProfile.last_donation_date) {
+          setPledgeLastDate(loadedProfile.last_donation_date);
+        }
+      }
 
-        setDonationHistory((hist as DonationHistory[]) ?? []);
+      // 2. Fetch Active Requests
+      const resRequests = await fetch('/api/requests');
+      if (resRequests.ok) {
+        const reqs = (await resRequests.json()) as MedicalRequest[];
+        if (Array.isArray(reqs)) {
+          setRequests(reqs);
+        }
+      }
+
+      // 3. Fetch Pledges (DIRECTIVE 1: query /api/pledges for user's donor & requester pledges)
+      const resPledges = await fetch('/api/pledges');
+      if (resPledges.ok) {
+        const pldgs = (await resPledges.json()) as Pledge[];
+        if (Array.isArray(pldgs)) {
+          setPledges(pldgs);
+        }
       } else {
-        setDonorPhone('');
-        setLastDonationDate('');
-        setDonationHistory([]);
+        // Fallback directly to supabase client if route is temporarily unavailable
+        const { data: pledgesData } = await supabase
+          .from('pledges')
+          .select('*, profiles:donor_id(full_name, phone_number)')
+          .order('created_at', { ascending: false });
+
+        if (pledgesData && Array.isArray(pledgesData)) {
+          setPledges(pledgesData as Pledge[]);
+        }
       }
 
-      const requestsResponse = await fetch('/api/requests', {
-        method: 'GET',
-        cache: 'no-store',
-      });
+      // 4. Fetch User's Verified Donation History
+      const { data: historyData } = await supabase
+        .from('donation_history')
+        .select('*')
+        .eq('donor_id', authUser.id)
+        .order('verified_at', { ascending: false });
 
-      if (!requestsResponse.ok) {
-        const errJson: ApiResponseError = await requestsResponse.json().catch(() => ({}));
-        throw new Error(errJson.error ?? 'Failed to load emergency requests.');
+      if (historyData && Array.isArray(historyData)) {
+        setDonationHistory(historyData as DonationHistory[]);
       }
-
-      const requestsData: MedicalRequest[] = await requestsResponse.json();
-      const sortedRequests = [...requestsData].sort((a, b) => {
-        const urgencyDiff = URGENCY_ORDER[a.urgency] - URGENCY_ORDER[b.urgency];
-        if (urgencyDiff !== 0) return urgencyDiff;
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      });
-
-      setRequests(sortedRequests);
-
-      const pledgesResponse = await fetch('/api/pledges', {
-        method: 'GET',
-        cache: 'no-store',
-      });
-
-      if (pledgesResponse.ok) {
-        const pledgesData: Pledge[] = await pledgesResponse.json();
-        setPledges(pledgesData);
-      } else if (pledgesResponse.status === 401) {
-        router.push('/auth');
-        return;
-      } else {
-        setPledges([]);
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Something went wrong while loading the dashboard.'
-      );
+    } catch (err: unknown) {
+      console.error('Failed to load dashboard data:', err);
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, [router, supabase]);
 
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
+    fetchData();
+  }, [fetchData]);
 
+  // Real-time Subscriptions on requests, pledges, and donation_history
   useEffect(() => {
     const channel = supabase
-      .channel('dashboard-realtime-sync')
+      .channel('lifeflow-dashboard-realtime')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'requests' },
-        () => { void loadData(); }
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newReq = payload.new as MedicalRequest;
+            if (newReq.status === 'Active') {
+              setRequests((prev) => {
+                if (prev.some((r) => r.id === newReq.id)) return prev;
+                return [newReq, ...prev];
+              });
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedReq = payload.new as MedicalRequest;
+            setRequests((prev) => {
+              if (updatedReq.status !== 'Active') {
+                return prev.filter((r) => r.id !== updatedReq.id);
+              }
+              return prev.map((r) => (r.id === updatedReq.id ? updatedReq : r));
+            });
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = (payload.old as { id: string }).id;
+            setRequests((prev) => prev.filter((r) => r.id !== oldId));
+          }
+        }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'pledges' },
-        () => { void loadData(); }
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newPledge = payload.new as Pledge;
+            setPledges((prev) => {
+              if (prev.some((p) => p.id === newPledge.id)) return prev;
+              return [newPledge, ...prev];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedPledge = payload.new as Pledge;
+            setPledges((prev) =>
+              prev.map((p) => (p.id === updatedPledge.id ? { ...p, ...updatedPledge } : p))
+            );
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = (payload.old as { id: string }).id;
+            setPledges((prev) => prev.filter((p) => p.id !== oldId));
+          }
+        }
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'donation_history' },
-        () => { void loadData(); }
+        { event: 'INSERT', schema: 'public', table: 'donation_history' },
+        (payload) => {
+          const newHistory = payload.new as DonationHistory;
+          if (user && newHistory.donor_id === user.id) {
+            setDonationHistory((prev) => [newHistory, ...prev]);
+            setUser((prev) => (prev ? { ...prev, last_donation_date: newHistory.verified_at.split('T')[0] } : prev));
+          }
+        }
       )
       .subscribe();
 
     return () => {
-      void supabase.removeChannel(channel);
+      supabase.removeChannel(channel);
     };
-  }, [loadData, supabase]);
-
-  const eligibility = useMemo(() => {
-    if (!isDonor) {
-      return { eligible: false, message: '', remainingDays: 0 };
-    }
-
-    if (!user?.last_donation_date) {
-      return {
-        eligible: true,
-        message: 'No previous donation date recorded. You are eligible to donate whole blood.',
-        remainingDays: 0,
-      };
-    }
-
-    const today = getTodayISODate();
-    const daysSinceDonation = getCalendarDayDifference(
-      user.last_donation_date,
-      today
-    );
-
-    if (daysSinceDonation < 0) {
-      return {
-        eligible: false,
-        message: 'Recorded last donation date cannot be in the future.',
-        remainingDays: 0,
-      };
-    }
-
-    if (daysSinceDonation < 90) {
-      return {
-        eligible: false,
-        message: `You have ${90 - daysSinceDonation} day(s) remaining in your 90-day recovery interval.`,
-        remainingDays: 90 - daysSinceDonation,
-      };
-    }
-
-    return {
-      eligible: true,
-      message: 'You have completed the 90-day recovery period and can donate.',
-      remainingDays: 0,
-    };
-  }, [isDonor, user?.last_donation_date]);
+  }, [supabase, user]);
 
   const handleSignOut = async () => {
     if (signingOut) return;
     setSigningOut(true);
-    clearMessages();
-
-    try {
-      const { error: signOutError } = await supabase.auth.signOut();
-      if (signOutError) {
-        throw new Error(signOutError.message);
-      }
-      router.push('/auth');
-      router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign out failed.');
-    } finally {
-      setSigningOut(false);
-    }
+    await supabase.auth.signOut();
+    router.push('/auth');
+    router.refresh();
   };
 
-  const handleCreateRequest = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    clearMessages();
+  // Permissive Request Posting (all authenticated users)
+  const handlePostRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
 
-    const trimmedItemName = itemName.trim();
-    const trimmedLocation = hospitalLocation.trim();
-    const trimmedContact = contactInfo.trim();
-    const units = Number(unitsNeeded);
-
-    if (!trimmedItemName) {
-      setError('Please enter the required item name.');
+    if (!itemName.trim() || !hospitalLocation.trim() || !contactInfo.trim() || unitsNeeded < 1) {
+      setFormError('Please enter all required fields with a valid units count.');
       return;
     }
 
-    if (!Number.isInteger(units) || units < 1) {
-      setError('Units needed must be a whole number greater than 0.');
-      return;
-    }
-
-    if (!trimmedLocation) {
-      setError('Please enter the hospital location.');
-      return;
-    }
-
-    if (!trimmedContact) {
-      setError('Please enter contact information.');
-      return;
-    }
-
+    setSubmitting(true);
     try {
-      setRequestLoading(true);
-
-      const response = await fetch('/api/requests', {
+      const res = await fetch('/api/requests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           item_type: itemType,
-          item_name: trimmedItemName,
-          units_needed: units,
+          item_name: itemName.trim(),
+          units_needed: Number(unitsNeeded),
           urgency,
-          hospital_location: trimmedLocation,
-          contact_info: trimmedContact,
+          hospital_location: hospitalLocation.trim(),
+          contact_info: contactInfo.trim(),
         }),
       });
 
-      const data: ApiResponseError = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data?.error ?? 'Failed to create request.');
+      if (!res.ok) {
+        const errJson = (await res.json()) as { error?: string };
+        throw new Error(errJson.error ?? 'Failed to publish emergency request.');
       }
 
-      setSuccess('Emergency request posted successfully.');
+      const created = (await res.json()) as MedicalRequest;
+      setRequests((prev) => [created, ...prev]);
       setItemName('');
-      setUnitsNeeded('1');
-      setUrgency('Standard');
       setHospitalLocation('');
       setContactInfo('');
-      setShowRequestForm(false);
+      setUnitsNeeded(1);
 
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create request.');
+      // Auto-dismissing top banner
+      setAlertBanner({
+        type: 'success',
+        message: 'Emergency shortage request broadcasted to the network.',
+      });
+    } catch (err: unknown) {
+      setFormError(err instanceof Error ? err.message : 'Submission failed.');
     } finally {
-      setRequestLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const openPledgeModal = (request: MedicalRequest) => {
-    clearMessages();
-
-    if (!isDonor) {
-      setError('Only registered donors can pledge donations.');
-      return;
+  // Open Pledge Modal (defaults to 1 unit)
+  const openPledgeModal = (req: MedicalRequest) => {
+    setSelectedRequestForPledge(req);
+    setPledgeUnits(1);
+    setPledgeEta(30);
+    setPledgeError(null);
+    if (user?.last_donation_date) {
+      setPledgeLastDate(user.last_donation_date);
     }
-
-    setPledgeTarget(request);
-    setEtaMinutes('30');
-    setPledgeError('');
-    setDonorPhone(user?.phone_number ?? '');
-    setLastDonationDate(user?.last_donation_date ?? '');
+    if (user?.phone_number) {
+      setPledgePhone(user.phone_number);
+    }
   };
 
-  const closePledgeModal = () => {
-    if (pledgeLoading) return;
-    setPledgeTarget(null);
-    setEtaMinutes('30');
-    setPledgeError('');
-  };
+  // Submit Pledge with 90-day Eligibility Guard
+  const handlePledgeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRequestForPledge) return;
 
-  const handlePledge = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!pledgeTarget || !isDonor) return;
+    setPledgeError(null);
 
-    const trimmedPhone = donorPhone.trim();
-    const eta = Number(etaMinutes);
-
-    if (!trimmedPhone) {
-      setPledgeError('Please provide a contact phone number.');
+    if (!pledgePhone.trim()) {
+      setPledgeError('Contact phone number is required so the hospital can reach you.');
       return;
     }
 
-    if (!Number.isInteger(eta) || eta < 1) {
-      setPledgeError('ETA must be a number of minutes greater than 0.');
+    if (pledgeUnits < 1 || pledgeUnits > selectedRequestForPledge.units_needed) {
+      setPledgeError(`Pledged units must be between 1 and ${selectedRequestForPledge.units_needed}.`);
       return;
     }
 
-    if (pledgeTarget.item_type === 'blood' && lastDonationDate) {
-      const today = getTodayISODate();
-      const diff = getCalendarDayDifference(lastDonationDate, today);
+    if (pledgeEta < 1) {
+      setPledgeError('Estimated arrival time must be at least 1 minute.');
+      return;
+    }
 
-      if (diff < 0) {
-        setPledgeError('Last donation date cannot be in the future.');
-        return;
-      }
-
-      if (diff < 90) {
+    // Client-side 90-day validation check for whole blood donations
+    if (selectedRequestForPledge.item_type === 'blood' && pledgeLastDate) {
+      const eligibility = getDonationEligibility(pledgeLastDate);
+      if (!eligibility.isEligible) {
         setPledgeError(
-          `Clinical safety requires 90 days between blood donations. You have ${90 - diff} day(s) remaining.`
+          `Ineligible to pledge blood: 90 days must elapse between donations. You have ${eligibility.daysRemaining} days remaining.`
         );
         return;
       }
     }
 
+    setPledgeSubmitting(true);
     try {
-      setPledgeLoading(true);
-      setPledgeError('');
-
-      const response = await fetch('/api/pledges', {
+      const res = await fetch('/api/pledges', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          request_id: pledgeTarget.id,
-          units_pledged: 1,
-          eta_minutes: eta,
-          last_donation_date: lastDonationDate || null,
-          donor_phone: trimmedPhone,
+          request_id: selectedRequestForPledge.id,
+          units_pledged: pledgeUnits,
+          eta_minutes: pledgeEta,
+          last_donation_date: pledgeLastDate || null,
+          donor_phone: pledgePhone.trim(),
         }),
       });
 
-      const data: ApiResponseError = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data?.error ?? 'Failed to submit pledge.');
+      if (!res.ok) {
+        const errJson = (await res.json()) as { error?: string };
+        throw new Error(errJson.error ?? 'Pledge submission failed');
       }
 
-      setPledgeTarget(null);
-      setSuccess('Donation pledge submitted successfully.');
-      await loadData();
-    } catch (err) {
-      setPledgeError(err instanceof Error ? err.message : 'Failed to submit pledge.');
-    } finally {
-      setPledgeLoading(false);
-    }
-  };
+      const createdPledge = (await res.json()) as Pledge;
+      // Immediately update local pledges state
+      setPledges((prev) => [createdPledge, ...prev]);
+      setSelectedRequestForPledge(null);
 
-  const handleArchiveRequest = async (requestId: string) => {
-    if (archivingRequestId) return;
-    clearMessages();
-    setArchivingRequestId(requestId);
-
-    try {
-      const response = await fetch(`/api/requests/${requestId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Archived' }),
+      // Auto-dismissing top banner
+      setAlertBanner({
+        type: 'success',
+        message: 'Pledge submitted successfully. Awaiting requester receipt verification.',
       });
-
-      const data: ApiResponseError = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data?.error ?? 'Failed to archive request.');
-      }
-
-      setSuccess('Request archived successfully.');
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to archive request.');
+    } catch (err: unknown) {
+      setPledgeError(err instanceof Error ? err.message : 'Error submitting pledge');
     } finally {
-      setArchivingRequestId(null);
+      setPledgeSubmitting(false);
     }
   };
 
+  // Requester Action: Mark Received & Verified
   const handleVerifyPledge = async (pledgeId: string) => {
-    if (verifyingPledgeId) return;
-    clearMessages();
     setVerifyingPledgeId(pledgeId);
-
     try {
-      const response = await fetch('/api/pledges/verify', {
+      const res = await fetch('/api/pledges/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pledge_id: pledgeId }),
       });
 
-      const data: ApiResponseError = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data?.error ?? 'Failed to verify pledge.');
+      if (!res.ok) {
+        const errJson = (await res.json()) as { error?: string };
+        throw new Error(errJson.error ?? 'Verification failed');
       }
 
-      setSuccess('Donation verified! Units updated and recorded in donor history.');
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to verify donation.');
+      const result = (await res.json()) as {
+        success: boolean;
+        pledge_id: string;
+        request_id: string;
+        units_needed: number;
+        request_status: string;
+      };
+
+      // DIRECTIVE 2: Immediately mark pledge as Verified in local state
+      // (This will automatically filter it out from "Incoming Donor Pledges")
+      setPledges((prev) =>
+        prev.map((p) =>
+          p.id === pledgeId ? { ...p, status: 'Verified', verified_at: new Date().toISOString() } : p
+        )
+      );
+
+      // Update local requests state
+      setRequests((prev) => {
+        if (result.request_status === 'Fulfilled' || result.units_needed <= 0) {
+          return prev.filter((r) => r.id !== result.request_id);
+        }
+        return prev.map((r) =>
+          r.id === result.request_id
+            ? { ...r, units_needed: result.units_needed, status: result.request_status as MedicalRequest['status'] }
+            : r
+        );
+      });
+
+      setAlertBanner({
+        type: 'success',
+        message: 'Pledge verified successfully and recorded into donation history.',
+      });
+
+      // Refetch history and requests
+      fetchData();
+    } catch (err: unknown) {
+      setAlertBanner({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to verify donation.',
+      });
     } finally {
       setVerifyingPledgeId(null);
     }
   };
 
-  const incomingPledges = useMemo(() => {
-    if (!user) return [];
-    return pledges.filter((pledge) => {
-      if (pledge.requests?.requester_id) {
-        return pledge.requests.requester_id === user.id;
+  // Requester Action: Archive Request
+  const handleArchive = async (requestId: string) => {
+    if (actionLoading[requestId]) return;
+    setActionLoading((prev) => ({ ...prev, [requestId]: true }));
+
+    try {
+      const res = await fetch(`/api/requests/${requestId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'Archived' }),
+      });
+
+      if (!res.ok) {
+        const errJson = (await res.json()) as { error?: string };
+        throw new Error(errJson.error ?? 'Archive failed');
       }
-      return requests.some((req) => req.id === pledge.request_id && req.requester_id === user.id);
+
+      setRequests((prev) => prev.filter((r) => r.id !== requestId));
+      setAlertBanner({
+        type: 'info',
+        message: 'Shortage request archived.',
+      });
+    } catch (err: unknown) {
+      setAlertBanner({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Error archiving request.',
+      });
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [requestId]: false }));
+    }
+  };
+
+  const filteredRequests = useMemo(() => {
+    return requests.filter((r) => {
+      if (activeFilter === 'blood') return r.item_type === 'blood';
+      if (activeFilter === 'medicine') return r.item_type === 'medicine';
+      if (activeFilter === 'critical') return r.urgency === 'Critical';
+      if (activeFilter === 'mine') return user ? r.requester_id === user.id : false;
+      return true;
     });
-  }, [pledges, requests, user]);
+  }, [requests, activeFilter, user]);
+
+  const donorEligibility = useMemo(() => {
+    return getDonationEligibility(user?.last_donation_date);
+  }, [user?.last_donation_date]);
+
+  function formatTime(isoString: string): string {
+    if (!mounted) return isoString;
+    try {
+      const d = new Date(isoString);
+      return d.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return isoString;
+    }
+  }
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-slate-600">
-          <Loader2 className="h-8 w-8 animate-spin text-red-600" />
-          <p className="text-sm font-medium">Loading LifeFlow Exchange...</p>
-        </div>
-      </main>
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
+        <Loader2 className="w-8 h-8 animate-spin text-red-500" />
+      </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b bg-white sticky top-0 z-30 shadow-xs">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-red-500/30 selection:text-red-200">
+      {/* Top Navbar */}
+      <nav className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 py-3 sm:py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-red-100 p-2 text-red-600">
-              <Droplets className="h-6 w-6" />
+            <div className="w-10 h-10 rounded-xl bg-red-600 flex items-center justify-center shadow-lg shadow-red-600/30">
+              <Activity className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-900 tracking-tight">LifeFlow</h1>
-              <p className="text-xs text-slate-500">Community Blood & Medicine Exchange</p>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-lg text-white tracking-wide">LifeFlow</span>
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-red-950/70 border border-red-800/40 text-[10px] font-semibold text-red-400 uppercase tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                  Live Lifeline Network
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 hidden sm:block">
+                Community Blood &amp; Rare Medicine Exchange
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => void loadData()}
-              disabled={refreshing}
-              className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
-              title="Refresh"
-            >
-              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-            </button>
-
-            <div className="hidden items-center gap-2 sm:flex">
-              <div className="rounded-full bg-slate-100 p-2">
-                <User className="h-4 w-4 text-slate-600" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-800 leading-none">
-                  {user?.full_name || 'User'}
-                </p>
-                <p className="text-xs capitalize text-slate-500 mt-0.5">
-                  {user?.role} {user?.hospital_name ? `• ${user.hospital_name}` : ''}
-                </p>
+          <div className="flex items-center gap-4">
+            <div className="text-right hidden sm:block">
+              <div className="text-sm font-semibold text-slate-100">{user?.full_name}</div>
+              <div className="text-xs text-slate-400 flex items-center justify-end gap-1.5">
+                {hasProfile && user?.role && (
+                  <span className="capitalize px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 font-medium">
+                    {user.role}
+                  </span>
+                )}
+                {user?.hospital_name && <span>• {user.hospital_name}</span>}
               </div>
             </div>
-
             <button
               type="button"
-              onClick={() => void handleSignOut()}
+              onClick={handleSignOut}
               disabled={signingOut}
-              className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+              className="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-2 transition-colors border border-slate-800 cursor-pointer disabled:opacity-50"
             >
-              {signingOut ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogOut className="h-3.5 w-3.5" />}
-              <span>Sign Out</span>
+              {signingOut ? <Loader2 className="w-4 h-4 animate-spin text-red-500" /> : <LogOut className="w-4 h-4" />}
+              <span className="hidden sm:inline">Sign Out</span>
             </button>
           </div>
         </div>
-      </header>
+      </nav>
 
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        {error && (
-          <div className="mb-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 text-sm">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div className="flex-1 font-medium">{error}</div>
-            <button type="button" onClick={() => setError('')} className="rounded-md p-1 hover:bg-red-100 cursor-pointer">
-              <X className="h-4 w-4" />
+      <main className="max-w-7xl mx-auto px-4 py-6 sm:py-8">
+        {/* DIRECTIVE 4: Auto-Dismissing Top Alert Banner (4 seconds) */}
+        {alertBanner && (
+          <div
+            className={`mb-6 p-4 rounded-xl border flex items-center justify-between shadow-xl transition-all ${
+              alertBanner.type === 'success'
+                ? 'bg-emerald-950/90 border-emerald-800 text-emerald-200'
+                : alertBanner.type === 'error'
+                ? 'bg-red-950/90 border-red-800 text-red-200'
+                : 'bg-slate-900 border-slate-700 text-slate-200'
+            }`}
+          >
+            <div className="flex items-center gap-3 text-xs font-semibold">
+              {alertBanner.type === 'success' ? (
+                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+              ) : alertBanner.type === 'error' ? (
+                <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+              ) : (
+                <Activity className="w-5 h-5 text-sky-400 shrink-0" />
+              )}
+              <span>{alertBanner.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAlertBanner(null)}
+              className="text-slate-400 hover:text-white p-1 rounded transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
             </button>
           </div>
         )}
 
-        {success && (
-          <div className="mb-5 flex items-start gap-3 rounded-xl border border-green-200 bg-green-50 p-4 text-green-800 text-sm">
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-            <div className="flex-1 font-medium">{success}</div>
-            <button type="button" onClick={() => setSuccess('')} className="rounded-md p-1 hover:bg-green-100 cursor-pointer">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-
-        <section className="mb-6 rounded-2xl bg-gradient-to-r from-red-600 to-rose-500 p-6 text-white shadow-sm">
-          <div className="flex flex-col justify-between gap-5 md:flex-row md:items-center">
+        {/* Metric Summary Ribbon & Eligibility Card */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          {/* Active Emergencies */}
+          <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl flex items-center justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-red-200">Live Exchange Portal</p>
-              <h2 className="text-2xl font-bold mt-1">Hello, {user?.full_name || 'Member'}</h2>
-              <p className="mt-1 text-sm text-red-50">
-                Post shortage requests or pledge essential supplies to save lives in real time.
+              <div className="text-xs text-slate-400 font-medium uppercase tracking-wider">Active Emergencies</div>
+              <div className="text-2xl font-bold text-white mt-1">{requests.length}</div>
+            </div>
+            <Activity className="w-7 h-7 text-red-500 opacity-80" />
+          </div>
+
+          {/* Critical Urgency */}
+          <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl flex items-center justify-between">
+            <div>
+              <div className="text-xs text-red-400 font-medium uppercase tracking-wider">Critical Urgency</div>
+              <div className="text-2xl font-bold text-red-500 mt-1">
+                {requests.filter((r) => r.urgency === 'Critical').length}
+              </div>
+            </div>
+            <AlertTriangle className="w-7 h-7 text-red-500 opacity-80" />
+          </div>
+
+          {/* My Active Posts */}
+          <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl flex items-center justify-between">
+            <div>
+              <div className="text-xs text-slate-400 font-medium uppercase tracking-wider">My Active Posts</div>
+              <div className="text-2xl font-bold text-slate-200 mt-1">
+                {user ? requests.filter((r) => r.requester_id === user.id).length : 0}
+              </div>
+            </div>
+            <User className="w-7 h-7 text-slate-400 opacity-80" />
+          </div>
+
+          {/* 90-Day Blood Donation Eligibility Card */}
+          <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs text-slate-400 font-medium uppercase tracking-wider">Donor Eligibility</span>
+              <Calendar className="w-4 h-4 text-slate-500" />
+            </div>
+            {donorEligibility.isEligible ? (
+              <div className="flex items-center gap-2 text-emerald-400 mt-1">
+                <ShieldCheck className="w-5 h-5 flex-shrink-0" />
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-wider">Eligible to Donate</div>
+                  <div className="text-[11px] text-slate-400">90-day cool-off verified</div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-amber-400 mt-1">
+                <Clock className="w-5 h-5 flex-shrink-0 text-amber-500" />
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-wider">{donorEligibility.daysRemaining} Days Remaining</div>
+                  <div className="text-[11px] text-slate-400">90-day donation cool-off active</div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Verified Donation History Section */}
+        {donationHistory.length > 0 && (
+          <div className="mb-8 bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                My Verified Donation History ({donationHistory.length})
+              </h3>
+              <span className="text-xs text-emerald-400 font-semibold">Hospital Verified</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {donationHistory.map((item) => (
+                <div key={item.id} className="bg-slate-950/80 border border-slate-800/80 p-3 rounded-xl text-xs space-y-1">
+                  <div className="flex items-center justify-between font-bold text-slate-100">
+                    <span>{item.item_name}</span>
+                    <span className="text-emerald-400 font-extrabold">{item.units_donated} Unit(s)</span>
+                  </div>
+                  <div className="text-slate-400 truncate flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
+                    <span>{item.hospital_location}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 pt-1 flex items-center gap-1 border-t border-slate-800/60">
+                    <Check className="w-3 h-3 text-emerald-500" />
+                    <span>Verified: {formatTime(item.verified_at)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Main Split Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Column: Post Emergency Request (Visible to ALL roles) */}
+          <div className="lg:col-span-1">
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sticky top-24 shadow-xl">
+              <h2 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                <PlusCircle className="w-5 h-5 text-red-500" />
+                Post Emergency Request
+              </h2>
+              <p className="text-xs text-slate-400 mb-5">
+                Broadcast urgent shortages to all nearby community donors and network partners
+              </p>
+
+              {formError && (
+                <div className="mb-4 p-3 rounded-lg bg-red-950/80 border border-red-800 text-red-300 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  <span>{formError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handlePostRequest} className="space-y-4">
+                {/* Item Type Toggle */}
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                    Item Category
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setItemType('blood')}
+                      className={`py-2 text-xs font-bold uppercase tracking-wider rounded-lg border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        itemType === 'blood'
+                          ? 'bg-red-600 border-red-500 text-white shadow-md shadow-red-950'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <Droplet className="w-3.5 h-3.5" /> Blood
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setItemType('medicine')}
+                      className={`py-2 text-xs font-bold uppercase tracking-wider rounded-lg border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        itemType === 'medicine'
+                          ? 'bg-red-600 border-red-500 text-white shadow-md shadow-red-950'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <Pill className="w-3.5 h-3.5" /> Medicine
+                    </button>
+                  </div>
+                </div>
+
+                {/* Specific Item Name */}
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                    Specific Item Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={itemName}
+                    onChange={(e) => setItemName(e.target.value)}
+                    placeholder={itemType === 'blood' ? 'e.g., O-Negative Whole Blood' : 'e.g., Factor VIII 500 IU'}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-red-500 transition-colors"
+                  />
+                </div>
+
+                {/* Units Needed & Urgency */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                      Units Needed
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      required
+                      value={unitsNeeded}
+                      onChange={(e) => setUnitsNeeded(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 focus:outline-none focus:border-red-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                      Urgency
+                    </label>
+                    <select
+                      value={urgency}
+                      onChange={(e) => setUrgency(e.target.value as 'Critical' | 'Urgent' | 'Standard')}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-sm text-slate-100 focus:outline-none focus:border-red-500 transition-colors"
+                    >
+                      <option value="Critical">Critical</option>
+                      <option value="Urgent">Urgent</option>
+                      <option value="Standard">Standard</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Hospital / Ward Location */}
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                    Hospital / Ward Location
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={hospitalLocation}
+                    onChange={(e) => setHospitalLocation(e.target.value)}
+                    placeholder="St. Jude ICU, Trauma Ward 3"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-red-500 transition-colors"
+                  />
+                </div>
+
+                {/* Emergency Contact Phone */}
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                    Emergency Contact (Direct Line)
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={contactInfo}
+                    onChange={(e) => setContactInfo(e.target.value)}
+                    placeholder="+1 (555) 019-2834"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-red-500 transition-colors"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full py-2.5 bg-red-600 hover:bg-red-700 disabled:bg-red-800 text-white rounded-lg font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shadow-lg shadow-red-900/30"
+                >
+                  {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Publish Emergency Request'}
+                </button>
+              </form>
+            </div>
+          </div>
+
+          {/* Right Column: Live Shortage Feed & Actions */}
+          <div className="lg:col-span-2">
+            {/* Filter Tabs */}
+            <div className="flex flex-wrap items-center gap-2 mb-6 border-b border-slate-800 pb-4">
+              {(['all', 'blood', 'medicine', 'critical', 'mine'] as Filter[]).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveFilter(tab)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer ${
+                    activeFilter === tab
+                      ? 'bg-red-600 text-white shadow-md shadow-red-900/20'
+                      : 'bg-slate-900/80 text-slate-400 border border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {tab === 'mine' ? 'My Posts' : tab}
+                </button>
+              ))}
+            </div>
+
+            {/* Empty State */}
+            {filteredRequests.length === 0 ? (
+              <div className="text-center py-16 bg-slate-900/40 border border-slate-800/60 rounded-2xl">
+                <Inbox className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                <h3 className="text-sm font-semibold text-slate-300">No active shortages found</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  There are currently no active emergency posts matching this filter criteria.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {filteredRequests.map((req) => {
+                  const isOwner = Boolean(user && req.requester_id === user.id);
+                  const isActionBusy = Boolean(actionLoading[req.id]);
+
+                  // All pledges logged for this request
+                  const requestPledges = pledges.filter((p) => p.request_id === req.id);
+
+                  // DIRECTIVE 2: Under "Incoming Donor Pledges", only display pledges that have status === 'Pending'
+                  const pendingIncomingPledges = requestPledges.filter(
+                    (p) => p.status === 'Pending' || p.status === 'Pledged'
+                  );
+
+                  // DIRECTIVE 3: Check if current donor has already submitted a pending pledge for this request
+                  const hasUserPendingPledge = Boolean(
+                    user &&
+                      pledges.some(
+                        (p) =>
+                          p.request_id === req.id &&
+                          p.donor_id === user.id &&
+                          (p.status === 'Pending' || p.status === 'Pledged')
+                      )
+                  );
+
+                  return (
+                    <div
+                      key={req.id}
+                      className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 hover:border-slate-700/80 transition-all shadow-md relative overflow-hidden"
+                    >
+                      {/* Urgency Color Accent */}
+                      <div
+                        className={`absolute top-0 left-0 bottom-0 w-1.5 ${
+                          req.urgency === 'Critical'
+                            ? 'bg-red-500'
+                            : req.urgency === 'Urgent'
+                            ? 'bg-amber-500'
+                            : 'bg-sky-500'
+                        }`}
+                      />
+
+                      <div className="flex items-start justify-between gap-4 mb-3 pl-2">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span
+                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                                req.urgency === 'Critical'
+                                  ? 'bg-red-950/80 border-red-800 text-red-400'
+                                  : req.urgency === 'Urgent'
+                                  ? 'bg-amber-950/80 border-amber-800 text-amber-400'
+                                  : 'bg-sky-950/80 border-sky-800 text-sky-400'
+                              }`}
+                            >
+                              {req.urgency}
+                            </span>
+                            <span className="text-xs text-slate-400 uppercase tracking-wide flex items-center gap-1 font-semibold">
+                              {req.item_type === 'blood' ? (
+                                <Droplet className="w-3.5 h-3.5 text-red-500" />
+                              ) : (
+                                <Pill className="w-3.5 h-3.5 text-emerald-500" />
+                              )}
+                              {req.item_type}
+                            </span>
+                            <span className="text-[11px] text-slate-500 ml-2">
+                              {formatTime(req.created_at)}
+                            </span>
+                          </div>
+                          <h3 className="text-lg font-bold text-white tracking-tight">{req.item_name}</h3>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <div className="text-2xl font-extrabold text-red-500">{req.units_needed}</div>
+                          <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+                            {req.units_needed === 1 ? 'Unit Needed' : 'Units Needed'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Request Metadata */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 py-3 border-t border-slate-800/80 text-xs text-slate-400 pl-2">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <MapPin className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          <span className="truncate">{req.hospital_location}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 truncate">
+                          <User className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          <span className="truncate">{req.requester_name}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 truncate">
+                          <Phone className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          <a href={`tel:${req.contact_info}`} className="hover:text-red-400 underline decoration-slate-700">
+                            {req.contact_info}
+                          </a>
+                        </div>
+                      </div>
+
+                      {/* Actions Footer */}
+                      <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-800/80 pl-2">
+                        <div className="text-xs text-slate-400">
+                          {pendingIncomingPledges.length > 0 && (
+                            <span className="text-amber-400/90 font-medium flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {pendingIncomingPledges.length} pending response(s)
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {/* DIRECTIVE 3: Dynamic button state when user already pledged */}
+                          {hasUserPendingPledge ? (
+                            <button
+                              type="button"
+                              disabled
+                              className="px-3.5 py-1.5 bg-slate-800/90 border border-amber-600/40 text-amber-400 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-not-allowed opacity-90 shadow-inner"
+                              title="You have already submitted a pending pledge for this shortage"
+                            >
+                              <Clock className="w-3.5 h-3.5 text-amber-400" />
+                              Pledged (Pending Verification)
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openPledgeModal(req)}
+                              className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-sm shadow-red-950"
+                            >
+                              <HeartHandshake className="w-4 h-4" />
+                              Pledge 1 Unit
+                            </button>
+                          )}
+
+                          {/* Requester-only moderation action */}
+                          {isOwner && (
+                            <button
+                              type="button"
+                              disabled={isActionBusy}
+                              onClick={() => handleArchive(req.id)}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer disabled:opacity-50"
+                            >
+                              {isActionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
+                              Archive
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* DIRECTIVE 2: Incoming Pledges Panel (Only displays pending pledges with status === 'Pending') */}
+                      {isOwner && pendingIncomingPledges.length > 0 && (
+                        <div className="mt-4 pt-3 border-t border-slate-800/90 pl-2 space-y-2">
+                          <div className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                            <span className="flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 text-amber-400" />
+                              Incoming Donor Pledges ({pendingIncomingPledges.length})
+                            </span>
+                            <span className="text-[10px] text-amber-400/90 font-semibold px-2 py-0.5 rounded-full bg-amber-950/60 border border-amber-800/40">
+                              Pending Verification
+                            </span>
+                          </div>
+                          <div className="space-y-2">
+                            {pendingIncomingPledges.map((pledge) => {
+                              const isVerifyingThis = verifyingPledgeId === pledge.id;
+                              return (
+                                <div
+                                  key={pledge.id}
+                                  className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                                >
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-slate-100">
+                                        {pledge.units_pledged} Unit(s) Pledged
+                                      </span>
+                                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-950/80 text-amber-400 border border-amber-800">
+                                        Pending
+                                      </span>
+                                      {pledge.profiles?.full_name && (
+                                        <span className="text-slate-400 font-medium">
+                                          by {pledge.profiles.full_name}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-slate-400 flex items-center gap-3">
+                                      <span className="flex items-center gap-1">
+                                        <Clock className="w-3 h-3 text-slate-500" /> ETA: ~{pledge.eta_minutes} mins
+                                      </span>
+                                      <span className="flex items-center gap-1">
+                                        <Phone className="w-3 h-3 text-slate-500" />
+                                        <a href={`tel:${pledge.donor_phone}`} className="text-red-400 underline">
+                                          {pledge.donor_phone}
+                                        </a>
+                                      </span>
+                                      <span>{formatTime(pledge.created_at)}</span>
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <button
+                                      type="button"
+                                      disabled={isVerifyingThis}
+                                      onClick={() => handleVerifyPledge(pledge.id)}
+                                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 shadow-md shadow-emerald-950"
+                                    >
+                                      {isVerifyingThis ? (
+                                        <>
+                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                          <span>Verifying...</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Check className="w-3.5 h-3.5" />
+                                          <span>Mark Received &amp; Verified</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </main>
+
+      {/* Pledge Modal */}
+      {selectedRequestForPledge && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => setSelectedRequestForPledge(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="mb-5">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-950/70 border border-red-800/40 text-red-400 text-[10px] font-bold uppercase tracking-wider mb-2">
+                Emergency Pledge Commitment
+              </div>
+              <h3 className="text-lg font-bold text-white">
+                Pledge for {selectedRequestForPledge.item_name}
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Location: {selectedRequestForPledge.hospital_location} • Needed: {selectedRequestForPledge.units_needed} Units
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                clearMessages();
-                setShowRequestForm((curr) => !curr);
-              }}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 font-bold text-red-600 shadow-sm transition hover:bg-red-50 cursor-pointer"
-            >
-              <Plus className="h-5 w-5" />
-              {showRequestForm ? 'Hide Form' : 'Post Shortage Request'}
-            </button>
-          </div>
-        </section>
-
-        {showRequestForm && (
-          <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">Post Emergency Request</h2>
-                <p className="text-xs text-slate-500">Accessible across all roles to register emergency needs.</p>
-              </div>
-              <button type="button" onClick={() => setShowRequestForm(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 cursor-pointer">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateRequest} className="grid gap-5 md:grid-cols-2">
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-slate-700">Category</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setItemType('blood')}
-                    className={`py-2.5 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer ${
-                      itemType === 'blood'
-                        ? 'bg-red-600 border-red-500 text-white'
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Droplets className="h-4 w-4" /> Blood
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setItemType('medicine')}
-                    className={`py-2.5 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer ${
-                      itemType === 'medicine'
-                        ? 'bg-red-600 border-red-500 text-white'
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Pill className="h-4 w-4" /> Medicine
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-slate-700">Item / Blood Group</label>
-                <input
-                  type="text"
-                  required
-                  value={itemName}
-                  onChange={(e) => setItemName(e.target.value)}
-                  placeholder={itemType === 'blood' ? 'e.g. O-Negative' : 'e.g. IVIG or Remdesivir'}
-                  className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-slate-700">Units Needed</label>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  required
-                  value={unitsNeeded}
-                  onChange={(e) => setUnitsNeeded(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-slate-700">Urgency</label>
-                <select
-                  value={urgency}
-                  onChange={(e) => setUrgency(e.target.value as Urgency)}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
-                >
-                  <option value="Critical">Critical</option>
-                  <option value="Urgent">Urgent</option>
-                  <option value="Standard">Standard</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-slate-700">Hospital / Location</label>
-                <input
-                  type="text"
-                  required
-                  value={hospitalLocation}
-                  onChange={(e) => setHospitalLocation(e.target.value)}
-                  placeholder="e.g. City General ICU"
-                  className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-slate-700">Emergency Phone</label>
-                <input
-                  type="tel"
-                  required
-                  value={contactInfo}
-                  onChange={(e) => setContactInfo(e.target.value)}
-                  placeholder="+91 9876543210"
-                  className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
-                />
-              </div>
-
-              <div className="md:col-span-2">
-                <button
-                  type="submit"
-                  disabled={requestLoading}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-6 py-2.5 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-50 cursor-pointer"
-                >
-                  {requestLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  {requestLoading ? 'Publishing...' : 'Publish Emergency Shortage'}
-                </button>
-              </div>
-            </form>
-          </section>
-        )}
-
-        {isDonor && (
-          <section className="mb-6 grid gap-5 md:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-start gap-4">
-                <div className={`rounded-xl p-3 ${eligibility.eligible ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}`}>
-                  {eligibility.eligible ? <ShieldCheck className="h-6 w-6" /> : <ShieldAlert className="h-6 w-6" />}
-                </div>
-                <div>
-                  <h3 className="font-bold text-slate-900">Blood Donation Eligibility</h3>
-                  <p className={`mt-1 text-sm ${eligibility.eligible ? 'text-green-700 font-medium' : 'text-orange-700'}`}>
-                    {eligibility.message}
-                  </p>
-                  <p className="mt-2 text-xs text-slate-500">
-                    A clinical 90-day recovery interval applies exclusively to blood donations. Medicine donations are exempt.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-start gap-4">
-                <div className="rounded-xl bg-red-100 p-3 text-red-600">
-                  <Calendar className="h-6 w-6" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-slate-900">Donor Profile Record</h3>
-                  <div className="mt-2 space-y-1 text-sm text-slate-600">
-                    <p><span className="font-medium">Direct Phone:</span> {user?.phone_number || 'Not provided'}</p>
-                    <p>
-                      <span className="font-medium">Last Donation:</span>{' '}
-                      {user?.last_donation_date ? formatDate(user.last_donation_date) : 'None recorded'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-        )}
-
-        <section className="mb-6">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-bold text-slate-900">Live Shortage Feed</h2>
-              <p className="text-xs text-slate-500">Sorted dynamically by urgency priority</p>
-            </div>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-              {requests.length} active
-            </span>
-          </div>
-
-          {requests.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center">
-              <Droplets className="mx-auto h-10 w-10 text-slate-300" />
-              <h3 className="mt-3 text-sm font-semibold text-slate-800">No active shortages listed</h3>
-              <p className="mt-1 text-xs text-slate-500">Check back shortly or post a new emergency request above.</p>
-            </div>
-          ) : (
-            <div className="grid gap-5 lg:grid-cols-2">
-              {requests.map((request) => {
-                const isOwner = request.requester_id === user?.id;
-                const canPledgeBlood = request.item_type !== 'blood' || eligibility.eligible;
-
-                return (
-                  <article key={request.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="mb-2 flex flex-wrap items-center gap-2">
-                          <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${getUrgencyClasses(request.urgency)}`}>
-                            {request.urgency}
-                          </span>
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
-                            {request.item_type}
-                          </span>
-                        </div>
-
-                        <h3 className="text-lg font-bold text-slate-900">{request.item_name}</h3>
-                      </div>
-
-                      <div className="text-right">
-                        <p className="text-2xl font-black text-red-600">{request.units_needed}</p>
-                        <p className="text-[10px] uppercase font-semibold text-slate-500 tracking-wider">units needed</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 space-y-2 text-xs text-slate-600">
-                      <div className="flex items-center gap-2">
-                        <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                        <span>{request.hospital_location}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Phone className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                        <span>{request.contact_info}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <User className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                        <span>Requested by {request.requester_name}</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-5 flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                      {isDonor && !isOwner && (
-                        <button
-                          type="button"
-                          onClick={() => openPledgeModal(request)}
-                          disabled={request.units_needed <= 0 || !canPledgeBlood}
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-2 text-xs font-bold text-white transition hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                        >
-                          <HeartHandshake className="h-3.5 w-3.5" />
-                          {!canPledgeBlood ? 'Recovery Interval Active' : 'Pledge 1 Unit'}
-                        </button>
-                      )}
-
-                      {isOwner && (
-                        <button
-                          type="button"
-                          onClick={() => void handleArchiveRequest(request.id)}
-                          disabled={archivingRequestId === request.id}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
-                        >
-                          {archivingRequestId === request.id ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Archive className="h-3.5 w-3.5" />
-                          )}
-                          Archive
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        {incomingPledges.length > 0 && (
-          <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-4">
-              <h2 className="text-lg font-bold text-slate-900">Incoming Donor Pledges</h2>
-              <p className="text-xs text-slate-500">Verify supplies upon delivery to credit donor records and decrement shortages.</p>
-            </div>
-
-            <div className="space-y-3">
-              {incomingPledges.map((pledge) => {
-                const isVerified = pledge.status === 'Verified';
-                const relatedRequestName =
-                  pledge.requests?.item_name ??
-                  requests.find((r) => r.id === pledge.request_id)?.item_name ??
-                  'Medical Supply';
-
-                return (
-                  <div key={pledge.id} className="flex flex-col gap-3 rounded-xl border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="font-bold text-slate-900 text-sm">{relatedRequestName}</p>
-                      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-                        <span>{pledge.units_pledged} unit pledged</span>
-                        <span>• ETA: ~{pledge.eta_minutes} mins</span>
-                        <span>• Contact: <strong className="text-slate-700">{pledge.donor_phone}</strong></span>
-                      </div>
-                    </div>
-
-                    {isVerified ? (
-                      <span className="inline-flex items-center gap-1 rounded-md bg-green-100 px-3 py-1.5 text-xs font-bold text-green-700">
-                        <CheckCircle2 className="h-3.5 w-3.5" /> Verified
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => void handleVerifyPledge(pledge.id)}
-                        disabled={verifyingPledgeId === pledge.id}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white transition hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
-                      >
-                        {verifyingPledgeId === pledge.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                        )}
-                        Mark Received & Verified
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        {isDonor && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-4 flex items-center gap-2">
-              <History className="h-5 w-5 text-red-600" />
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">My Verified Donation History</h2>
-                <p className="text-xs text-slate-500">Verified donations linked to your donor profile.</p>
-              </div>
-            </div>
-
-            {donationHistory.length === 0 ? (
-              <div className="rounded-xl bg-slate-50 p-6 text-center text-xs text-slate-500">
-                No verified donation records yet.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200 uppercase tracking-wider text-slate-500 font-semibold">
-                      <th className="py-2.5">Item</th>
-                      <th className="py-2.5">Units</th>
-                      <th className="py-2.5">Hospital Location</th>
-                      <th className="py-2.5">Verified Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {donationHistory.map((history) => (
-                      <tr key={history.id} className="border-b border-slate-100 last:border-0 text-slate-700">
-                        <td className="py-3 font-semibold text-slate-900">{history.item_name}</td>
-                        <td className="py-3">{history.units_donated}</td>
-                        <td className="py-3">{history.hospital_location}</td>
-                        <td className="py-3 text-emerald-600 font-medium">
-                          {formatDate(history.verified_at)} {formatTime(history.verified_at)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
-      </div>
-
-      {pledgeTarget && isDonor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-            <div className="flex items-start justify-between pb-3 border-b border-slate-100">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-1.5">
-                  <HeartHandshake className="h-4 w-4 text-red-600" />
-                  Pledge for {pledgeTarget.item_name}
-                </h3>
-                <p className="text-xs text-slate-500">{pledgeTarget.hospital_location}</p>
-              </div>
-              <button type="button" onClick={closePledgeModal} className="text-slate-400 hover:text-slate-600 cursor-pointer">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
             {pledgeError && (
-              <div className="my-3 rounded-lg bg-red-50 p-2.5 text-xs text-red-700 flex items-start gap-1.5 border border-red-200">
-                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div className="mb-4 p-3 rounded-lg bg-red-950/80 border border-red-800 text-red-300 text-xs flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
                 <span>{pledgeError}</span>
               </div>
             )}
 
-            <form onSubmit={handlePledge} className="space-y-4 mt-4 text-xs font-semibold">
+            <form onSubmit={handlePledgeSubmit} className="space-y-4">
+              {/* Units to Pledge */}
               <div>
-                <label className="block text-slate-700 mb-1">ETA in Minutes</label>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                  Units to Pledge
+                </label>
                 <input
                   type="number"
-                  min="1"
+                  min={1}
+                  max={selectedRequestForPledge.units_needed}
                   required
-                  value={etaMinutes}
-                  onChange={(e) => setEtaMinutes(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal outline-none focus:border-red-500"
+                  value={pledgeUnits}
+                  onChange={(e) => setPledgeUnits(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-red-500"
                 />
               </div>
 
+              {/* Estimated Arrival Time */}
               <div>
-                <label className="block text-slate-700 mb-1">Donor Phone (Shared with Requester)</label>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                  Estimated Arrival Time (Minutes)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  required
+                  value={pledgeEta}
+                  onChange={(e) => setPledgeEta(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-red-500"
+                  placeholder="30"
+                />
+              </div>
+
+              {/* Last Donation Date (for 90-day check) */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                  Date of Last Donation (For 90-Day Clinical Cool-Off)
+                </label>
+                <input
+                  type="date"
+                  value={pledgeLastDate}
+                  onChange={(e) => setPledgeLastDate(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-red-500"
+                />
+                {selectedRequestForPledge.item_type === 'blood' && pledgeLastDate && (
+                  <div className="mt-1.5">
+                    {(() => {
+                      const elig = getDonationEligibility(pledgeLastDate);
+                      if (!elig.isEligible) {
+                        return (
+                          <div className="text-[11px] text-amber-400 flex items-center gap-1 font-semibold">
+                            <Clock className="w-3.5 h-3.5 shrink-0" />
+                            <span>Ineligible: {elig.daysRemaining} days remaining in 90-day cool-off period.</span>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="text-[11px] text-emerald-400 flex items-center gap-1 font-semibold">
+                          <Check className="w-3.5 h-3.5 shrink-0" />
+                          <span>Eligible for donation (&gt;90 days elapsed).</span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* Donor Contact Phone */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">
+                  Your Contact Phone Number
+                </label>
                 <input
                   type="tel"
                   required
-                  value={donorPhone}
-                  onChange={(e) => setDonorPhone(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal outline-none focus:border-red-500"
+                  value={pledgePhone}
+                  onChange={(e) => setPledgePhone(e.target.value)}
+                  placeholder="+1 (555) 019-2834"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-red-500"
                 />
               </div>
 
-              {pledgeTarget.item_type === 'blood' && (
-                <div>
-                  <label className="block text-slate-700 mb-1">Last Whole-Blood Donation Date</label>
-                  <input
-                    type="date"
-                    max={getTodayISODate()}
-                    value={lastDonationDate}
-                    onChange={(e) => setLastDonationDate(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal outline-none focus:border-red-500"
-                  />
-                  <p className="text-[10px] text-slate-400 font-normal mt-1">Leave blank if this is your first donation.</p>
-                </div>
-              )}
-
-              <div className="flex gap-2 pt-2">
+              <div className="pt-2 flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={closePledgeModal}
-                  disabled={pledgeLoading}
-                  className="flex-1 py-2.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer"
+                  onClick={() => setSelectedRequestForPledge(null)}
+                  className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={pledgeLoading}
-                  className="flex-1 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold cursor-pointer"
+                  disabled={pledgeSubmitting}
+                  className="w-1/2 py-2.5 bg-red-600 hover:bg-red-700 disabled:bg-red-800 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed shadow-lg shadow-red-900/30"
                 >
-                  {pledgeLoading ? 'Submitting...' : 'Confirm Pledge'}
+                  {pledgeSubmitting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Confirming...</span>
+                    </>
+                  ) : (
+                    'Confirm Pledge'
+                  )}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
-    </main>
+    </div>
   );
 }
