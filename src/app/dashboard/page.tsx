@@ -334,6 +334,7 @@ export default function DashboardPage() {
   // Post emergency request
   const handlePostRequest = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     setFormError(null);
 
     if (!itemName.trim() || !hospitalLocation.trim() || !contactInfo.trim() || unitsNeeded < 1) {
@@ -362,7 +363,10 @@ export default function DashboardPage() {
       }
 
       const created = (await res.json()) as MedicalRequest;
-      setRequests((prev) => [created, ...prev]);
+      setRequests((prev) => {
+        if (prev.some((r) => r.id === created.id)) return prev;
+        return [created, ...prev];
+      });
       setItemName('');
       setHospitalLocation('');
       setContactInfo('');
@@ -748,7 +752,11 @@ export default function DashboardPage() {
   };
 
   const filteredAndSortedRequests = useMemo(() => {
+    const seenIds = new Set<string>();
     const list = requests.filter((r) => {
+      if (seenIds.has(r.id)) return false;
+      seenIds.add(r.id);
+
       if (activeFilter === 'blood' && r.item_type !== 'blood') return false;
       if (activeFilter === 'medicine' && r.item_type !== 'medicine') return false;
       if (activeFilter === 'critical' && r.urgency !== 'Critical') return false;
