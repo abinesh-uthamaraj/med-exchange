@@ -37,6 +37,8 @@ import {
   AlertTriangle,
   Layers,
   Trash2,
+  Pencil,
+  Share2,
 } from 'lucide-react';
 
 type Filter = 'all' | 'blood' | 'medicine' | 'critical' | 'mine';
@@ -119,6 +121,32 @@ export default function DashboardPage() {
   const [pledgePhone, setPledgePhone] = useState<string>('');
   const [pledgeSubmitting, setPledgeSubmitting] = useState(false);
   const [pledgeError, setPledgeError] = useState<string | null>(null);
+
+  // Edit Request Modal State (Allows updating units, blood group, urgency, location)
+  const [editingRequest, setEditingRequest] = useState<MedicalRequest | null>(null);
+  const [editItemType, setEditItemType] = useState<'blood' | 'medicine'>('blood');
+  const [editItemName, setEditItemName] = useState<string>('');
+  const [editUnitsNeeded, setEditUnitsNeeded] = useState<number>(1);
+  const [editUrgency, setEditUrgency] = useState<'Critical' | 'Urgent' | 'Standard'>('Critical');
+  const [editHospitalLocation, setEditHospitalLocation] = useState<string>('');
+  const [editContactInfo, setEditContactInfo] = useState<string>('');
+  const [editSubmitting, setEditSubmitting] = useState<boolean>(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Profile Settings Modal State
+  const [profileModalOpen, setProfileModalOpen] = useState<boolean>(false);
+  const [editFullName, setEditFullName] = useState<string>('');
+  const [editPhone, setEditPhone] = useState<string>('');
+  const [editBloodGroup, setEditBloodGroup] = useState<string>('');
+  const [editHospital, setEditHospital] = useState<string>('');
+  const [editRole, setEditRole] = useState<'donor' | 'hospital' | 'caregiver'>('donor');
+  const [profileSaving, setProfileSaving] = useState<boolean>(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
+  // Interactive Notification Bell & Card Menu State
+  const [notificationsOpen, setNotificationsOpen] = useState<boolean>(false);
+  const [unreadCount, setUnreadCount] = useState<number>(1);
+  const [openCardMenuId, setOpenCardMenuId] = useState<string | null>(null);
 
   // Hydration Mount State
   const [mounted, setMounted] = useState<boolean>(false);
@@ -552,6 +580,165 @@ export default function DashboardPage() {
     }
   };
 
+  // Open Edit Request Modal
+  const openEditModal = (req: MedicalRequest) => {
+    setEditingRequest(req);
+    setEditItemType(req.item_type);
+    setEditItemName(req.item_name);
+    setEditUnitsNeeded(req.units_needed);
+    setEditUrgency(req.urgency);
+    setEditHospitalLocation(req.hospital_location);
+    setEditContactInfo(req.contact_info);
+    setEditError(null);
+    setOpenCardMenuId(null);
+  };
+
+  // Submit Updated Request (PATCH /api/requests/:id)
+  const handleUpdateRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRequest) return;
+    setEditError(null);
+
+    if (!editItemName.trim() || !editHospitalLocation.trim() || !editContactInfo.trim() || editUnitsNeeded < 1) {
+      setEditError('Please fill in all fields with a valid units number (>= 1).');
+      return;
+    }
+
+    setEditSubmitting(true);
+    try {
+      if (editingRequest.id === 'demo-req-1') {
+        const simulated: MedicalRequest = {
+          ...editingRequest,
+          item_type: editItemType,
+          item_name: editItemName.trim(),
+          units_needed: Number(editUnitsNeeded),
+          urgency: editUrgency,
+          hospital_location: editHospitalLocation.trim(),
+          contact_info: editContactInfo.trim(),
+        };
+        setRequests((prev) => prev.map((r) => (r.id === simulated.id ? simulated : r)));
+        setEditingRequest(null);
+        setAlertBanner({
+          type: 'success',
+          message: 'Emergency request updated successfully.',
+        });
+        return;
+      }
+
+      const res = await fetch(`/api/requests/${editingRequest.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          item_type: editItemType,
+          item_name: editItemName.trim(),
+          units_needed: Number(editUnitsNeeded),
+          urgency: editUrgency,
+          hospital_location: editHospitalLocation.trim(),
+          contact_info: editContactInfo.trim(),
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = (await res.json()) as { error?: string };
+        throw new Error(errJson.error ?? 'Failed to update emergency request.');
+      }
+
+      const resData = (await res.json()) as { success: boolean; request: MedicalRequest };
+      const updatedReq = resData.request;
+
+      setRequests((prev) => prev.map((r) => (r.id === updatedReq.id ? updatedReq : r)));
+      setEditingRequest(null);
+      setAlertBanner({
+        type: 'success',
+        message: 'Emergency request updated successfully.',
+      });
+    } catch (err: unknown) {
+      setEditError(err instanceof Error ? err.message : 'Failed to update request.');
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  // Open Profile Settings Modal
+  const openProfileModal = () => {
+    if (user) {
+      setEditFullName(user.full_name || '');
+      setEditPhone(user.phone_number || '');
+      setEditBloodGroup(user.blood_group || 'O+');
+      setEditHospital(user.hospital_name || '');
+      setEditRole(user.role || 'donor');
+    }
+    setProfileError(null);
+    setProfileModalOpen(true);
+    setMobileMenuOpen(false);
+  };
+
+  // Save Profile Changes to Supabase
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setProfileError(null);
+
+    if (!editFullName.trim()) {
+      setProfileError('Full name is required.');
+      return;
+    }
+
+    setProfileSaving(true);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          full_name: editFullName.trim(),
+          phone_number: editPhone.trim() || null,
+          blood_group: editBloodGroup.trim() || null,
+          hospital_name: editHospital.trim() || null,
+          role: editRole,
+        })
+        .eq('id', user.id);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      setUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              full_name: editFullName.trim(),
+              phone_number: editPhone.trim() || null,
+              blood_group: editBloodGroup.trim() || null,
+              hospital_name: editHospital.trim() || null,
+              role: editRole,
+            }
+          : prev
+      );
+
+      setProfileModalOpen(false);
+      setAlertBanner({
+        type: 'success',
+        message: 'Profile & account settings saved successfully.',
+      });
+    } catch (err: unknown) {
+      setProfileError(err instanceof Error ? err.message : 'Error updating profile.');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  // Copy Share Link
+  const handleCopyShareLink = (reqId: string) => {
+    if (typeof window !== 'undefined') {
+      const url = `${window.location.origin}/dashboard?request=${reqId}`;
+      navigator.clipboard.writeText(url);
+      setAlertBanner({
+        type: 'info',
+        message: 'Request link copied to clipboard.',
+      });
+    }
+    setOpenCardMenuId(null);
+  };
+
   const isDonor = user?.role === 'donor';
 
   const priorityMap: Record<MedicalRequest['urgency'], number> = {
@@ -757,40 +944,21 @@ export default function DashboardPage() {
               <span>Donation History</span>
             </button>
 
-            {/* 5. Messages */}
+            {/* 5. Profile */}
             <button
               type="button"
-              onClick={() => {
-                setAlertBanner({ type: 'info', message: 'Direct emergency channel active. Incoming hospital communications are synced.' });
-                setMobileMenuOpen(false);
-              }}
-              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold tracking-wide text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-all"
-            >
-              <MessageSquare className="w-4 h-4 text-slate-400" />
-              <span>Messages</span>
-            </button>
-
-            {/* 6. Profile */}
-            <button
-              type="button"
-              onClick={() => {
-                setAlertBanner({ type: 'info', message: `Signed in as ${displayName} (${displayRole})` });
-                setMobileMenuOpen(false);
-              }}
-              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold tracking-wide text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-all"
+              onClick={openProfileModal}
+              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold tracking-wide text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-all cursor-pointer"
             >
               <User className="w-4 h-4 text-slate-400" />
               <span>Profile</span>
             </button>
 
-            {/* 7. Settings */}
+            {/* 6. Settings */}
             <button
               type="button"
-              onClick={() => {
-                setAlertBanner({ type: 'info', message: 'LifeFlow dark command center theme configured.' });
-                setMobileMenuOpen(false);
-              }}
-              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold tracking-wide text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-all"
+              onClick={openProfileModal}
+              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold tracking-wide text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-all cursor-pointer"
             >
               <Settings className="w-4 h-4 text-slate-400" />
               <span>Settings</span>
@@ -860,29 +1028,92 @@ export default function DashboardPage() {
           {/* Right User Bar matching reference */}
           <div className="flex items-center gap-3.5">
             {/* Notification Bell with red 1 badge */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setNotificationsOpen((prev) => !prev)}
+                className="relative p-2 rounded-xl bg-[#121826] border border-[#1d273d] text-slate-400 hover:text-white transition-colors cursor-pointer"
+                title="Notifications"
+              >
+                <Bell className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 text-[9px] font-bold text-white flex items-center justify-center">
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Notifications Dropdown Popover */}
+              {notificationsOpen && (
+                <div className="absolute right-0 mt-2 w-80 bg-[#0f1523] border border-[#1c263c] rounded-2xl shadow-2xl p-4 z-50 space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Bell className="w-3.5 h-3.5 text-red-500" />
+                      Notifications
+                    </span>
+                    {unreadCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnreadCount(0);
+                          setAlertBanner({ type: 'info', message: 'All notifications marked as read.' });
+                        }}
+                        className="text-[10px] text-slate-400 hover:text-red-400 font-semibold cursor-pointer"
+                      >
+                        Mark all read
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 text-xs">
+                    <div className="bg-[#141b2d] border border-red-900/30 rounded-xl p-2.5">
+                      <div className="font-bold text-white text-[11px] flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3 text-red-400" />
+                        Critical Shortage Alert
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        High-urgency blood cases active in your metropolitan hospital network.
+                      </p>
+                    </div>
+
+                    <div className="bg-[#141b2d] border border-[#1d283f] rounded-xl p-2.5">
+                      <div className="font-bold text-white text-[11px] flex items-center gap-1">
+                        <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                        Donor Eligibility Status
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        {donorEligibility.isEligible
+                          ? 'You are currently eligible to donate whole blood.'
+                          : `${donorEligibility.daysRemaining} days remaining in your clinical cooldown period.`}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Avatar & User Name (Click to open Profile & Settings) */}
             <button
               type="button"
-              onClick={() => setAlertBanner({ type: 'info', message: 'You have 1 active emergency broadcast in your area.' })}
-              className="relative p-2 rounded-xl bg-[#121826] border border-[#1d273d] text-slate-400 hover:text-white transition-colors cursor-pointer"
+              onClick={openProfileModal}
+              className="flex items-center gap-2.5 p-1 rounded-xl hover:bg-slate-800/40 transition-colors cursor-pointer text-left"
+              title="Click to edit Profile & Settings"
             >
-              <Bell className="w-4 h-4" />
-              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 text-[9px] font-bold text-white flex items-center justify-center">
-                1
-              </span>
-            </button>
-
-            {/* Avatar Circle with initial */}
-            <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center font-bold text-white text-xs shrink-0">
-              {displayName.charAt(0) || 'R'}
-            </div>
-
-            {/* User Name & Role */}
-            <div className="text-left hidden sm:block">
-              <div className="text-xs font-bold text-white leading-tight">{displayName}</div>
-              <div className="text-[10px] text-slate-400 capitalize leading-tight">
-                {displayRole}
+              <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center font-bold text-white text-xs shrink-0">
+                {displayName.charAt(0) || 'R'}
               </div>
-            </div>
+
+              {/* User Name & Role */}
+              <div className="text-left hidden sm:block">
+                <div className="text-xs font-bold text-white leading-tight flex items-center gap-1">
+                  <span>{displayName}</span>
+                  <Settings className="w-3 h-3 text-slate-500" />
+                </div>
+                <div className="text-[10px] text-slate-400 capitalize leading-tight">
+                  {displayRole}
+                </div>
+              </div>
+            </button>
 
             {/* Sign Out Button matching reference */}
             <button
@@ -1451,9 +1682,63 @@ export default function DashboardPage() {
                             UNIT NEEDED
                           </span>
                         </div>
-                        <button type="button" className="text-slate-500 hover:text-white">
-                          <MoreVertical className="w-4 h-4" />
-                        </button>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => setOpenCardMenuId((prev) => (prev === req.id ? null : req.id))}
+                            className="text-slate-500 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                            title="More options"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </button>
+                          {openCardMenuId === req.id && (
+                            <div className="absolute right-0 mt-1 w-44 bg-[#0d1320] border border-[#1d2940] rounded-xl shadow-2xl py-1.5 z-30 text-xs">
+                              {isOwner && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditModal(req)}
+                                    className="w-full text-left px-3 py-1.5 text-slate-300 hover:text-white hover:bg-slate-800/70 flex items-center gap-2 cursor-pointer"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5 text-sky-400" />
+                                    <span>Edit Request</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenCardMenuId(null);
+                                      handleArchive(req.id);
+                                    }}
+                                    className="w-full text-left px-3 py-1.5 text-slate-300 hover:text-white hover:bg-slate-800/70 flex items-center gap-2 cursor-pointer"
+                                  >
+                                    <Archive className="w-3.5 h-3.5 text-amber-400" />
+                                    <span>Archive</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenCardMenuId(null);
+                                      handleDeleteRequest(req.id);
+                                    }}
+                                    className="w-full text-left px-3 py-1.5 text-red-400 hover:text-red-300 hover:bg-red-950/40 flex items-center gap-2 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>Delete</span>
+                                  </button>
+                                  <div className="border-t border-slate-800 my-1" />
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleCopyShareLink(req.id)}
+                                className="w-full text-left px-3 py-1.5 text-slate-300 hover:text-white hover:bg-slate-800/70 flex items-center gap-2 cursor-pointer"
+                              >
+                                <Share2 className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Copy Link</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1518,9 +1803,20 @@ export default function DashboardPage() {
                         </>
                       )}
 
-                      {/* Requester-only Archive & Delete */}
+                      {/* Requester-only Edit, Archive & Delete */}
                       {isOwner && req.id !== 'demo-req-1' && (
                         <>
+                          <button
+                            type="button"
+                            disabled={isActionBusy}
+                            onClick={() => openEditModal(req)}
+                            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-sky-800/40 cursor-pointer disabled:opacity-50"
+                            title="Edit request (Update units, blood group, urgency, location)"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+
                           <button
                             type="button"
                             disabled={isActionBusy}
@@ -1547,6 +1843,16 @@ export default function DashboardPage() {
 
                       {req.id === 'demo-req-1' && (
                         <>
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(req)}
+                            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-sky-800/40 cursor-pointer"
+                            title="Edit emergency request"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => setAlertBanner({ type: 'info', message: 'Demo request archive simulated.' })}
@@ -1798,6 +2104,386 @@ export default function DashboardPage() {
                     </>
                   ) : (
                     'Confirm Pledge'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 4. UPDATE EMERGENCY REQUEST MODAL (Supports Updating Blood Group, Units, Urgency, Location) */}
+      {/* ========================================================================= */}
+      {editingRequest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-[#0f1523] border border-sky-800/40 rounded-2xl w-full max-w-md p-6 relative shadow-2xl space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Pencil className="w-4 h-4 text-sky-400" />
+                  Update Emergency Request
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Modify units, blood group, urgency, or facility details.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingRequest(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {editError && (
+              <div className="p-3 rounded-xl bg-red-950/80 border border-red-800 text-red-300 text-xs flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateRequest} className="space-y-3.5">
+              {/* Category Segmented Toggle */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Item Category
+                </label>
+                <div className="grid grid-cols-2 gap-2 bg-[#090d16] p-1 rounded-xl border border-[#1a2337]">
+                  <button
+                    type="button"
+                    onClick={() => setEditItemType('blood')}
+                    className={`py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      editItemType === 'blood'
+                        ? 'bg-red-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Droplet className="w-3.5 h-3.5" />
+                    <span>Blood</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditItemType('medicine')}
+                    className={`py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      editItemType === 'medicine'
+                        ? 'bg-red-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Pill className="w-3.5 h-3.5" />
+                    <span>Medicine</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Quick Blood Group Chips (if blood) */}
+              {editItemType === 'blood' && (
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                    Select Blood Group
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'Bombay (hh)', 'Rh-null'].map((bg) => (
+                      <button
+                        key={bg}
+                        type="button"
+                        onClick={() => setEditItemName(bg)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                          editItemName === bg
+                            ? 'bg-red-600 text-white border-red-500 shadow-sm'
+                            : 'bg-[#090d16] border-[#1c263c] text-slate-300 hover:border-slate-500'
+                        }`}
+                      >
+                        {bg}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Specific Item Name */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Specific Item Name / Blood Group
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editItemName}
+                  onChange={(e) => setEditItemName(e.target.value)}
+                  placeholder={editItemType === 'blood' ? 'e.g. O+, O-, AB-, Bombay Blood' : 'e.g. IVIG, Anti-D, Factor VIII'}
+                  className="w-full bg-[#0a0e18] border border-[#1a2337] rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-red-500"
+                />
+              </div>
+
+              {/* Units Needed & Urgency */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                    Units Needed
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditUnitsNeeded((prev) => Math.max(1, prev - 1))}
+                      className="w-8 h-8 rounded-lg bg-[#141b2d] border border-[#1d2940] text-slate-300 hover:text-white flex items-center justify-center font-bold text-sm cursor-pointer"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      required
+                      value={editUnitsNeeded}
+                      onChange={(e) => setEditUnitsNeeded(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      className="w-full text-center bg-[#0a0e18] border border-[#1a2337] rounded-xl py-1.5 text-xs text-slate-100 focus:outline-none focus:border-red-500 font-bold"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEditUnitsNeeded((prev) => prev + 1)}
+                      className="w-8 h-8 rounded-lg bg-[#141b2d] border border-[#1d2940] text-slate-300 hover:text-white flex items-center justify-center font-bold text-sm cursor-pointer"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                    Urgency Level
+                  </label>
+                  <select
+                    value={editUrgency}
+                    onChange={(e) => setEditUrgency(e.target.value as 'Critical' | 'Urgent' | 'Standard')}
+                    className="w-full bg-[#0a0e18] border border-[#1a2337] rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-red-500 cursor-pointer"
+                  >
+                    <option value="Critical" className="bg-[#0f1523]">Critical</option>
+                    <option value="Urgent" className="bg-[#0f1523]">Urgent</option>
+                    <option value="Standard" className="bg-[#0f1523]">Standard</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Hospital Location */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Hospital Location / Facility
+                </label>
+                <div className="relative">
+                  <MapPin className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    required
+                    value={editHospitalLocation}
+                    onChange={(e) => setEditHospitalLocation(e.target.value)}
+                    placeholder="Hospital name, floor, city..."
+                    className="w-full bg-[#0a0e18] border border-[#1a2337] rounded-xl pl-9 pr-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+              </div>
+
+              {/* Contact Information */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Direct Line Phone Number
+                </label>
+                <div className="relative">
+                  <Phone className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="tel"
+                    required
+                    value={editContactInfo}
+                    onChange={(e) => setEditContactInfo(e.target.value)}
+                    placeholder="+1 (555) 019-2834"
+                    className="w-full bg-[#0a0e18] border border-[#1a2337] rounded-xl pl-9 pr-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="pt-2 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setEditingRequest(null)}
+                  className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={editSubmitting}
+                  className="w-1/2 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed shadow-lg shadow-sky-950"
+                >
+                  {editSubmitting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    'Save Changes'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 5. USER PROFILE & SETTINGS MODAL */}
+      {/* ========================================================================= */}
+      {profileModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-[#0f1523] border border-red-900/30 rounded-2xl w-full max-w-md p-6 relative shadow-2xl space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Settings className="w-4 h-4 text-red-500" />
+                  Profile &amp; Account Settings
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Update your contact details, clinical role, and blood group.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProfileModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {profileError && (
+              <div className="p-3 rounded-xl bg-red-950/80 border border-red-800 text-red-300 text-xs flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <span>{profileError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveProfile} className="space-y-3.5">
+              {/* Full Name */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Full Name / Display Name
+                </label>
+                <div className="relative">
+                  <User className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    required
+                    value={editFullName}
+                    onChange={(e) => setEditFullName(e.target.value)}
+                    placeholder="Rohith"
+                    className="w-full bg-[#0a0e18] border border-[#1a2337] rounded-xl pl-9 pr-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+              </div>
+
+              {/* Phone Number */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Phone Number (For Hospital Contacts)
+                </label>
+                <div className="relative">
+                  <Phone className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="tel"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    placeholder="+91 99164 52100"
+                    className="w-full bg-[#0a0e18] border border-[#1a2337] rounded-xl pl-9 pr-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+              </div>
+
+              {/* Blood Group Dropdown */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Personal Blood Group
+                </label>
+                <select
+                  value={editBloodGroup}
+                  onChange={(e) => setEditBloodGroup(e.target.value)}
+                  className="w-full bg-[#0a0e18] border border-[#1a2337] rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-red-500 cursor-pointer"
+                >
+                  <option value="O+" className="bg-[#0f1523]">O Positive (O+)</option>
+                  <option value="O-" className="bg-[#0f1523]">O Negative (O-)</option>
+                  <option value="A+" className="bg-[#0f1523]">A Positive (A+)</option>
+                  <option value="A-" className="bg-[#0f1523]">A Negative (A-)</option>
+                  <option value="B+" className="bg-[#0f1523]">B Positive (B+)</option>
+                  <option value="B-" className="bg-[#0f1523]">B Negative (B-)</option>
+                  <option value="AB+" className="bg-[#0f1523]">AB Positive (AB+)</option>
+                  <option value="AB-" className="bg-[#0f1523]">AB Negative (AB-)</option>
+                  <option value="Bombay (hh)" className="bg-[#0f1523]">Bombay Blood Group (hh)</option>
+                  <option value="Rh-null" className="bg-[#0f1523]">Rh-null (Golden Blood)</option>
+                  <option value="Other" className="bg-[#0f1523]">Other Rare Phenotype</option>
+                </select>
+              </div>
+
+              {/* Role Selector */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Account Role
+                </label>
+                <div className="grid grid-cols-3 gap-2 bg-[#090d16] p-1 rounded-xl border border-[#1a2337]">
+                  {(['donor', 'hospital', 'caregiver'] as const).map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setEditRole(r)}
+                      className={`py-1.5 rounded-lg text-xs font-bold capitalize transition-all cursor-pointer ${
+                        editRole === r
+                          ? 'bg-red-600 text-white shadow-md'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Hospital / Facility Affiliation */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                  Hospital / Medical Facility Affiliation (Optional)
+                </label>
+                <div className="relative">
+                  <Building2 className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={editHospital}
+                    onChange={(e) => setEditHospital(e.target.value)}
+                    placeholder="e.g. Apollo Hospital, Cauvery Medical Center"
+                    className="w-full bg-[#0a0e18] border border-[#1a2337] rounded-xl pl-9 pr-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="pt-2 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setProfileModalOpen(false)}
+                  className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={profileSaving}
+                  className="w-1/2 py-2.5 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed shadow-lg shadow-red-950"
+                >
+                  {profileSaving ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    'Save Profile'
                   )}
                 </button>
               </div>
