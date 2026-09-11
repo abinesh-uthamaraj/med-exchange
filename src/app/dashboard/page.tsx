@@ -36,6 +36,7 @@ import {
   Siren,
   AlertTriangle,
   Layers,
+  Trash2,
 } from 'lucide-react';
 
 type Filter = 'all' | 'blood' | 'medicine' | 'critical' | 'mine';
@@ -512,6 +513,39 @@ export default function DashboardPage() {
       setAlertBanner({
         type: 'error',
         message: err instanceof Error ? err.message : 'Error archiving request.',
+      });
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [requestId]: false }));
+    }
+  };
+
+  // Delete Request (Hard Delete via HTTP DELETE /api/requests/:id)
+  const handleDeleteRequest = async (requestId: string) => {
+    if (typeof window !== 'undefined' && !window.confirm('Are you sure you want to permanently delete this emergency request?')) {
+      return;
+    }
+    if (actionLoading[requestId]) return;
+    setActionLoading((prev) => ({ ...prev, [requestId]: true }));
+
+    try {
+      const res = await fetch(`/api/requests/${requestId}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) {
+        const errJson = (await res.json()) as { error?: string };
+        throw new Error(errJson.error ?? 'Delete failed');
+      }
+
+      setRequests((prev) => prev.filter((r) => r.id !== requestId));
+      setAlertBanner({
+        type: 'info',
+        message: 'Emergency request permanently deleted from database.',
+      });
+    } catch (err: unknown) {
+      setAlertBanner({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Error deleting request.',
       });
     } finally {
       setActionLoading((prev) => ({ ...prev, [requestId]: false }));
@@ -1484,28 +1518,53 @@ export default function DashboardPage() {
                         </>
                       )}
 
-                      {/* Requester-only Archive */}
+                      {/* Requester-only Archive & Delete */}
                       {isOwner && req.id !== 'demo-req-1' && (
-                        <button
-                          type="button"
-                          disabled={isActionBusy}
-                          onClick={() => handleArchive(req.id)}
-                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer disabled:opacity-50"
-                        >
-                          {isActionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
-                          <span>Archive</span>
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            disabled={isActionBusy}
+                            onClick={() => handleArchive(req.id)}
+                            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer disabled:opacity-50"
+                            title="Archive request (Soft Delete)"
+                          >
+                            {isActionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
+                            <span>Archive</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isActionBusy}
+                            onClick={() => handleDeleteRequest(req.id)}
+                            className="px-3.5 py-2 bg-red-950/40 hover:bg-red-900/60 text-red-400 hover:text-red-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-red-800/50 cursor-pointer disabled:opacity-50"
+                            title="Permanently Delete request (Hard Delete)"
+                          >
+                            {isActionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                            <span>Delete</span>
+                          </button>
+                        </>
                       )}
 
                       {req.id === 'demo-req-1' && (
-                        <button
-                          type="button"
-                          onClick={() => setAlertBanner({ type: 'info', message: 'Demo request archive simulated.' })}
-                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer"
-                        >
-                          <Archive className="w-3.5 h-3.5" />
-                          <span>Archive</span>
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setAlertBanner({ type: 'info', message: 'Demo request archive simulated.' })}
+                            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer"
+                          >
+                            <Archive className="w-3.5 h-3.5" />
+                            <span>Archive</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setAlertBanner({ type: 'info', message: 'Demo request delete simulated.' })}
+                            className="px-3.5 py-2 bg-red-950/40 hover:bg-red-900/60 text-red-400 hover:text-red-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-red-800/50 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        </>
                       )}
                     </div>
 
